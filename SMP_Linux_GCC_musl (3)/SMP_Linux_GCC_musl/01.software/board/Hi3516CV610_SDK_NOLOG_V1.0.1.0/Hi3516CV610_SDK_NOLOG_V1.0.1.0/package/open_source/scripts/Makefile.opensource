@@ -1,0 +1,46 @@
+noop=
+space = $(noop) $(noop)
+PKG_SUFFIX := .tar .tgz .zip .tar.gz .tar.xz .tar.bz2 .patch
+
+# TOP_DIR := $(1)
+# MODULE_NAME := $(2)
+
+OPEN_SOURCE_SCRIPT_DIR:=$(shell cd $(TOP_DIR)/../scripts/; pwd)
+
+ifneq ($(CHIP_FAMILY),)
+ifeq ($(OPEN_SOURCE_SCRIPT_DIR)/$(CHIP_FAMILY), $(wildcard $(OPEN_SOURCE_SCRIPT_DIR)/$(CHIP_FAMILY)))
+include  $(OPEN_SOURCE_SCRIPT_DIR)/$(CHIP_FAMILY)/Makefile.opensource.version
+endif
+endif
+
+FOLDER_NAME := $(shell find $(TOP_DIR) -maxdepth 1 -type d -regex ".*$(MODULE_NAME)-[0-9].*\(?!pc|board\)")
+
+ifneq ($(FOLDER_NAME),)
+$(eval FOLDER_NAME := $(shell basename $(firstword $(FOLDER_NAME))))
+SOURCE_DIR_VER := $(subst $(MODULE_NAME)-,,$(FOLDER_NAME))
+endif
+
+PKG_PATTEN := $(subst $(space),|,$(PKG_SUFFIX))
+PKG_PATTEN_SED := $(subst $(space),\|,$(PKG_SUFFIX))
+
+PKG_NAMES := $(shell find $(TOP_DIR) -maxdepth 1 -type f -regextype egrep -iregex ".*$(MODULE_NAME)-[0-9].*($(PKG_PATTEN))")
+
+ifneq ($(PKG_NAMES),)
+PKG_NAMES := $(shell echo $(PKG_NAMES) | xargs -n 1 basename)
+SELECT_PKG := $(firstword $(sort $(PKG_NAMES)))
+PKG_VER := $(shell echo "$(SELECT_PKG)" | sed -e "s/^$(MODULE_NAME)-//" -e "s/$(PKG_PATTEN_SED)//")
+endif
+
+ifeq ($($(MODULE_NAME)-version),)
+$(MODULE_NAME)-version := $(SOURCE_DIR_VER)
+endif
+
+ifeq ($($(MODULE_NAME)-version),)
+$(MODULE_NAME)-version := $(PKG_VER)
+endif
+
+ifeq ($($(MODULE_NAME)-version),)
+$(warning "---------------------------------------------------------------------")
+$(warning "   Cannot found $(MODULE_NAME) pkg!!!!!!!!!!!!!       ")
+$(warning "---------------------------------------------------------------------")
+endif

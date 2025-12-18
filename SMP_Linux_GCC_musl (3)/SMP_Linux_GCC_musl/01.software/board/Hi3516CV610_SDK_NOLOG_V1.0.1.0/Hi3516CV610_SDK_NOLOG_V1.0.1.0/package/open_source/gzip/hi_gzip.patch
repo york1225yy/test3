@@ -1,0 +1,836 @@
+diff --git a/deflate.c b/deflate.c
+index 55bdc0e..3add924 100644
+--- a/deflate.c
++++ b/deflate.c
+@@ -378,6 +378,9 @@ longest_match(IPos cur_match)
+     register int len;                           /* length of current match */
+     int best_len = prev_length;                 /* best match length so far */
+     IPos limit = strstart > (IPos)MAX_DIST ? strstart - (IPos)MAX_DIST : NIL;
++    #ifdef __aarch64__
++    IPos next_match;
++    #endif
+     /* Stop when cur_match becomes <= limit. To simplify the code,
+      * we prevent matches with the string of window index 0.
+      */
+@@ -412,6 +415,11 @@ longest_match(IPos cur_match)
+         Assert(cur_match < strstart, "no future");
+         match = window + cur_match;
+ 
++        #ifdef __aarch64__
++        next_match = prev[cur_match & WMASK];
++        __asm__("PRFM PLDL1STRM, [%0]"::"r"(&(prev[next_match & WMASK])));
++        #endif
++
+         /* Skip to next match if the match length cannot increase
+          * or if the match length is less than 2:
+          */
+@@ -488,8 +496,14 @@ longest_match(IPos cur_match)
+             scan_end   = scan[best_len];
+ #endif
+         }
+-    } while ((cur_match = prev[cur_match & WMASK]) > limit
++    } 
++    #ifdef __aarch64__
++    while ((cur_match = next_match) > limit
++             && --chain_length != 0);
++    #else
++    while ((cur_match = prev[cur_match & WMASK]) > limit
+              && --chain_length != 0);
++    #endif
+ 
+     return best_len;
+ }
+@@ -777,7 +791,19 @@ deflate (int pack_level)
+             lookahead -= prev_length-1;
+             prev_length -= 2;
+             RSYNC_ROLL(strstart, prev_length+1);
++            while (prev_length >= 4) {
++                prev_length -= 4;
++                strstart++;
++                INSERT_STRING(strstart, hash_head);
++                strstart++;
++                INSERT_STRING(strstart, hash_head);
++                strstart++;
++                INSERT_STRING(strstart, hash_head);
++                strstart++;
++                INSERT_STRING(strstart, hash_head);
++            }
+             do {
++                if (prev_length == 0) break;
+                 strstart++;
+                 INSERT_STRING(strstart, hash_head);
+                 /* strstart never exceeds WSIZE-MAX_MATCH, so there are
+diff --git a/doc/gzip.texi b/doc/gzip.texi
+index abceb58..48b3485 100644
+--- a/doc/gzip.texi
++++ b/doc/gzip.texi
+@@ -300,14 +300,6 @@ ratio: compression ratio (0.0% if unknown)
+ uncompressed_name: name of the uncompressed file
+ @end example
+ 
+-The uncompressed size is given as @minus{}1 for files not in @command{gzip}
+-format, such as compressed @samp{.Z} files.  To get the uncompressed size for
+-such a file, you can use:
+-
+-@example
+-zcat file.Z | wc -c
+-@end example
+-
+ In combination with the @option{--verbose} option, the following fields are also
+ displayed:
+ 
+@@ -323,16 +315,6 @@ With @option{--verbose}, the size totals and compression ratio for all files
+ is also displayed, unless some sizes are unknown.  With @option{--quiet},
+ the title and totals lines are not displayed.
+ 
+-The @command{gzip} format represents the input size modulo
+-@math{2^32}, so the uncompressed size and compression ratio are listed
+-incorrectly for uncompressed files 4 GiB and larger.  To work around
+-this problem, you can use the following command to discover a large
+-uncompressed file's true size:
+-
+-@example
+-zcat file.gz | wc -c
+-@end example
+-
+ @item --license
+ @itemx -L
+ Display the @command{gzip} license then quit.
+diff --git a/gzip.1 b/gzip.1
+index 0ae9765..65dea22 100644
+--- a/gzip.1
++++ b/gzip.1
+@@ -492,17 +492,6 @@ detects that there is extra trailing garbage after the compressed data
+ and emits a warning by default.  You can use the --quiet option to
+ suppress the warning.
+ .SH BUGS
+-The gzip format represents the input size modulo 2^32, so the
+---list option reports incorrect uncompressed sizes and compression
+-ratios for uncompressed files 4 GB and larger.  To work around this
+-problem, you can use the following command to discover a large
+-uncompressed file's true size:
+-
+-      zcat file.gz | wc -c
+-
+-The --list option reports sizes as -1 and crc as ffffffff if the
+-compressed file is on a non seekable media.
+-
+ In some rare cases, the --best option gives worse compression than
+ the default compression level (-6). On some highly redundant files,
+ .B compress
+diff --git a/gzip.c b/gzip.c
+index f75b614..9f6bb69 100644
+--- a/gzip.c
++++ b/gzip.c
+@@ -317,7 +317,7 @@ local void discard_input_bytes (size_t nbytes, unsigned int flags);
+ local int  make_ofname  (void);
+ local void shorten_name  (char *name);
+ local int  get_method   (int in);
+-local void do_list      (int ifd, int method);
++local void do_list      (int method);
+ local int  check_ofname (void);
+ local void copy_stat    (struct stat *ifstat);
+ local void install_signal_handlers (void);
+@@ -537,7 +537,7 @@ int main (int argc, char **argv)
+         case 'k':
+             keep = 1; break;
+         case 'l':
+-            list = decompress = to_stdout = 1; break;
++            list = decompress = test = to_stdout = 1; break;
+         case 'L':
+             license (); finish_out (); break;
+         case 'm': /* undocumented, may change later */
+@@ -663,7 +663,7 @@ int main (int argc, char **argv)
+ 
+     /* And get to work */
+     if (file_count != 0) {
+-        if (to_stdout && !test && !list && (!decompress || !ascii)) {
++        if (to_stdout && !test && (!decompress || !ascii)) {
+             SET_BINARY_MODE (STDOUT_FILENO);
+         }
+         while (optind < argc) {
+@@ -681,7 +681,7 @@ int main (int argc, char **argv)
+       {
+         /* Output any totals, and check for output errors.  */
+         if (!quiet && 1 < file_count)
+-          do_list (-1, -1);
++          do_list (-1);
+         if (fflush (stdout) != 0)
+           write_error ();
+       }
+@@ -767,7 +767,7 @@ local void treat_stdin()
+     if (decompress || !ascii) {
+       SET_BINARY_MODE (STDIN_FILENO);
+     }
+-    if (!test && !list && (!decompress || !ascii)) {
++    if (!test && (!decompress || !ascii)) {
+       SET_BINARY_MODE (STDOUT_FILENO);
+     }
+     strcpy(ifname, "stdin");
+@@ -794,10 +794,6 @@ local void treat_stdin()
+             do_exit(exit_code); /* error message already emitted */
+         }
+     }
+-    if (list) {
+-        do_list(ifd, method);
+-        return;
+-    }
+ 
+     /* Actually do the compression/decompression. Loop over zipped members.
+      */
+@@ -813,6 +809,12 @@ local void treat_stdin()
+         bytes_out = 0;            /* required for length check */
+     }
+ 
++    if (list)
++      {
++        do_list (method);
++        return;
++      }
++
+     if (verbose) {
+         if (test) {
+             fprintf(stderr, " OK\n");
+@@ -957,7 +959,7 @@ local void treat_file(iname)
+     /* Generate output file name. For -r and (-t or -l), skip files
+      * without a valid gzip suffix (check done in make_ofname).
+      */
+-    if (to_stdout && !list && !test) {
++    if (to_stdout && !test) {
+         strcpy(ofname, "stdout");
+ 
+     } else if (make_ofname() != OK) {
+@@ -975,12 +977,6 @@ local void treat_file(iname)
+             return;               /* error message already emitted */
+         }
+     }
+-    if (list) {
+-        do_list(ifd, method);
+-        if (close (ifd) != 0)
+-          read_error ();
+-        return;
+-    }
+ 
+     /* If compressing to a file, check if ofname is not ambiguous
+      * because the operating system truncates names. Otherwise, generate
+@@ -1000,7 +996,7 @@ local void treat_file(iname)
+     /* Keep the name even if not truncated except with --no-name: */
+     if (!save_orig_name) save_orig_name = !no_name;
+ 
+-    if (verbose) {
++    if (verbose && !list) {
+         fprintf(stderr, "%s:\t", ifname);
+     }
+ 
+@@ -1023,6 +1019,12 @@ local void treat_file(iname)
+     if (close (ifd) != 0)
+       read_error ();
+ 
++    if (list)
++      {
++        do_list (method);
++        return;
++      }
++
+     if (!to_stdout)
+       {
+         copy_stat (&istat);
+@@ -1074,7 +1076,7 @@ local void treat_file(iname)
+         } else {
+             display_ratio(bytes_in-(bytes_out-header_bytes), bytes_in, stderr);
+         }
+-        if (!test && !to_stdout)
++        if (!test)
+           fprintf(stderr, " -- %s %s", keep ? "created" : "replaced with",
+                   ofname);
+         fprintf(stderr, "\n");
+@@ -1403,7 +1405,8 @@ local int make_ofname()
+             /* With -t or -l, try all files (even without .gz suffix)
+              * except with -r (behave as with just -dr).
+              */
+-            if (!recursive && (list || test)) return OK;
++            if (!recursive && test)
++              return OK;
+ 
+             /* Avoid annoying messages with -r */
+             if (verbose || (!recursive && !quiet)) {
+@@ -1696,7 +1699,6 @@ local int get_method(in)
+         last_member = 1;
+         if (imagic0 != EOF) {
+             write_buf (STDOUT_FILENO, magic, 1);
+-            bytes_out++;
+         }
+     }
+     if (method >= 0) return method;
+@@ -1732,9 +1734,8 @@ local int get_method(in)
+  * If the given method is < 0, display the accumulated totals.
+  * IN assertions: time_stamp, header_bytes and ifile_size are initialized.
+  */
+-local void do_list(ifd, method)
+-    int ifd;     /* input file descriptor */
+-    int method;  /* compression method */
++static void
++do_list (int method)
+ {
+     ulg crc;  /* original crc */
+     static int first_time = 1;
+@@ -1776,26 +1777,9 @@ local void do_list(ifd, method)
+         return;
+     }
+     crc = (ulg)~0; /* unknown */
+-    bytes_out = -1L;
+-    bytes_in = ifile_size;
+ 
+     if (method == DEFLATED && !last_member) {
+-        /* Get the crc and uncompressed size for gzip'ed (not zip'ed) files.
+-         * If the lseek fails, we could use read() to get to the end, but
+-         * --list is used to get quick results.
+-         * Use "gunzip < foo.gz | wc -c" to get the uncompressed size if
+-         * you are not concerned about speed.
+-         */
+-        bytes_in = lseek(ifd, (off_t)(-8), SEEK_END);
+-        if (bytes_in != -1L) {
+-            uch buf[8];
+-            bytes_in += 8L;
+-            if (read(ifd, (char*)buf, sizeof(buf)) != sizeof(buf)) {
+-                read_error();
+-            }
+-            crc       = LG(buf);
+-            bytes_out = LG(buf+4);
+-        }
++      crc = unzip_crc;
+     }
+ 
+     if (verbose)
+diff --git a/gzip.h b/gzip.h
+index 7c0acd4..4eee8e4 100644
+--- a/gzip.h
++++ b/gzip.h
+@@ -262,6 +262,7 @@ extern int zip        (int in, int out);
+ extern int file_read  (char *buf,  unsigned size);
+ 
+         /* in unzip.c */
++extern ulg unzip_crc;
+ extern int unzip      (int in, int out);
+ extern int check_zipfile (int in);
+ 
+diff --git a/tests/Makefile.am b/tests/Makefile.am
+index 256bbf7..28a1828 100644
+--- a/tests/Makefile.am
++++ b/tests/Makefile.am
+@@ -21,6 +21,7 @@ TESTS =					\
+   hufts					\
+   keep					\
+   list					\
++  list-big				\
+   memcpy-abuse				\
+   mixed					\
+   null-suffix-clobber			\
+@@ -35,6 +36,7 @@ TESTS =					\
+   z-suffix				\
+   zdiff					\
+   zgrep-f				\
++  zgrep-abuse				\
+   zgrep-context				\
+   zgrep-signal				\
+   znew-k
+diff --git a/tests/list-big b/tests/list-big
+new file mode 100755
+index 0000000..afa3310
+--- /dev/null
++++ b/tests/list-big
+@@ -0,0 +1,31 @@
++#!/bin/sh
++# Exercise the --list option with a big file.
++
++# Copyright 2021 Free Software Foundation, Inc.
++
++# This program is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <https://www.gnu.org/licenses/>.
++# limit so don't run it by default.
++
++. "${srcdir=.}/init.sh"; path_prepend_ ..
++
++truncate --size 4G big || framework_failure_
++
++gzip -1 big || fail=1
++gzip -l big.gz >out || fail=1
++case $(cat out) in
++  *' 4294967296 '*' big') ;;
++  *) cat out; fail=1;;
++esac
++
++Exit $fail
+diff --git a/tests/zgrep-abuse b/tests/zgrep-abuse
+new file mode 100755
+index 0000000..3e8a8f9
+--- /dev/null
++++ b/tests/zgrep-abuse
+@@ -0,0 +1,41 @@
++#!/bin/sh
++# Show how zgrep applied to a crafted file name may overwrite
++# a selected file with chosen content.  Fixed in gzip-1.12.
++
++# Copyright (C) 2022 Free Software Foundation, Inc.
++
++# This program is free software: you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation, either version 3 of the License, or
++# (at your option) any later version.
++
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++
++# You should have received a copy of the GNU General Public License
++# along with this program.  If not, see <https://www.gnu.org/licenses/>.
++# limit so don't run it by default.
++
++. "${srcdir=.}/init.sh"; path_prepend_ ..
++
++: > z || framework_failure_
++echo test |gzip > 'z|
++p
++1s|.*|chosen-content|
++1w hacked
++etouch .\x2fhacked2
++d
++#
++#' || framework_failure_
++
++fail=0
++
++zgrep test z* > /dev/null
++
++# Before the fix, each of these would be created.
++test -f hacked && fail=1
++test -f hacked2 && fail=1
++
++Exit $fail
+diff --git a/unlzh.c b/unlzh.c
+index 37084fe..f018922 100644
+--- a/unlzh.c
++++ b/unlzh.c
+@@ -390,9 +390,8 @@ int unlzh(in, out)
+     decode_start();
+     while (!done) {
+         n = decode((unsigned) DICSIZ, window);
+-        if (!test && n > 0) {
+-            write_buf(out, (char*)window, n);
+-        }
++        if (n > 0)
++          write_buf (out, window, n);
+     }
+     return OK;
+ }
+diff --git a/unlzw.c b/unlzw.c
+index d5b01f5..e8a2d67 100644
+--- a/unlzw.c
++++ b/unlzw.c
+@@ -224,10 +224,8 @@ int unlzw(in, out)
+                             "posbits:%ld inbuf:%02X %02X %02X %02X %02X\n",
+                             posbits, p[-1],p[0],p[1],p[2],p[3]);
+ #endif
+-                    if (!test && outpos > 0) {
+-                        write_buf(out, (char*)outbuf, outpos);
+-                        bytes_out += (off_t)outpos;
+-                    }
++                    if (outpos > 0)
++                      write_buf (out, outbuf, outpos);
+                     gzip_error (to_stdout
+                                 ? "corrupt input."
+                                 : "corrupt input. Use zcat to recover some data.");
+@@ -256,10 +254,7 @@ int unlzw(in, out)
+                             outpos += i;
+                         }
+                         if (outpos >= OUTBUFSIZ) {
+-                            if (!test) {
+-                                write_buf(out, (char*)outbuf, outpos);
+-                                bytes_out += (off_t)outpos;
+-                            }
++                            write_buf (out, outbuf, outpos);
+                             outpos = 0;
+                         }
+                         stackp+= i;
+@@ -280,9 +275,7 @@ int unlzw(in, out)
+         }
+     } while (rsize != 0);
+ 
+-    if (!test && outpos > 0) {
+-        write_buf(out, (char*)outbuf, outpos);
+-        bytes_out += (off_t)outpos;
+-    }
++    if (outpos > 0)
++      write_buf (out, outbuf, outpos);
+     return OK;
+ }
+diff --git a/unzip.c b/unzip.c
+index dacfbaf..b52811e 100644
+--- a/unzip.c
++++ b/unzip.c
+@@ -51,6 +51,8 @@
+ 
+ /* Globals */
+ 
++ulg unzip_crc;  /* CRC found by 'unzip'.  */
++
+ static int decrypt;        /* flag to turn on decryption */
+ static int pkzip = 0;      /* set for a pkzip file */
+ static int ext_header = 0; /* set if extended local header */
+@@ -210,6 +212,7 @@ int unzip(in, out)
+         }
+     }
+     ext_header = pkzip = 0; /* for next file */
++    unzip_crc = orig_crc;
+     if (err == OK) return OK;
+     exit_code = ERROR;
+     if (!test) abort_gzip();
+diff --git a/util.c b/util.c
+index e4240a7..4287a58 100644
+--- a/util.c
++++ b/util.c
+@@ -31,6 +31,9 @@
+ #include "gzip.h"
+ #include <dirname.h>
+ #include <xalloc.h>
++#ifdef __aarch64__
++#include <arm_acle.h>
++#endif
+ 
+ #ifndef CHAR_BIT
+ #  define CHAR_BIT 8
+@@ -41,6 +44,7 @@ static int write_buffer (int, voidp, unsigned int);
+ /* ========================================================================
+  * Table of CRC-32's of all single-byte values (made by makecrc.c)
+  */
++#ifndef __aarch64__
+ static const ulg crc_32_tab[] = {
+   0x00000000L, 0x77073096L, 0xee0e612cL, 0x990951baL, 0x076dc419L,
+   0x706af48fL, 0xe963a535L, 0x9e6495a3L, 0x0edb8832L, 0x79dcb8a4L,
+@@ -95,6 +99,7 @@ static const ulg crc_32_tab[] = {
+   0x5d681b02L, 0x2a6f2b94L, 0xb40bbe37L, 0xc30c8ea1L, 0x5a05df1bL,
+   0x2d02ef8dL
+ };
++#endif
+ 
+ /* Shift register contents.  */
+ static ulg crc = 0xffffffffL;
+@@ -112,7 +117,6 @@ int copy(in, out)
+     errno = 0;
+     while (insize > inptr) {
+         write_buf(out, (char*)inbuf + inptr, insize - inptr);
+-        bytes_out += insize - inptr;
+         got = read_buffer (in, (char *) inbuf, INBUFSIZ);
+         if (got == -1)
+             read_error();
+@@ -132,6 +136,48 @@ ulg updcrc(s, n)
+     const uch *s;           /* pointer to bytes to pump through */
+     unsigned n;             /* number of bytes in s[] */
+ {
++    #ifdef __aarch64__
++    register ulg c;
++    register const uint8_t  *buf1;
++    register const uint16_t *buf2;
++    register const uint32_t *buf4;
++    register const uint64_t *buf8;
++    int64_t length = (int64_t)n;
++    buf8 = (const  uint64_t *)(const void *)s;
++
++    if (s == NULL) {
++        c = 0xffffffffL;
++    } else {
++       c = crc;
++	
++    	while(length >= sizeof(uint64_t)) {
++    		c = __crc32d(c, *buf8++);
++    		length -= sizeof(uint64_t);
++    	}
++
++    	buf4 = (const uint32_t *)(const void *)buf8;
++    	if (length >= sizeof(uint32_t)) {
++    		c = __crc32w(c, *buf4++);
++    		length -= sizeof(uint32_t);
++    	}
++
++    	buf2 = (const uint16_t *)(const void *)buf4;
++    	if(length >= sizeof(uint16_t)) {
++    		c = __crc32h(c, *buf2++);
++    		length -= sizeof(uint16_t);
++    	}
++
++    	buf1 = (const uint8_t *)(const void *)buf2;
++    	if (length >= sizeof(uint8_t)) {
++    		c = __crc32b(c, *buf1);
++    		length -= sizeof(uint8_t);
++    	}
++    }
++
++	crc = c;
++
++    return (c ^ 0xffffffffL);
++#else
+     register ulg c;         /* temporary variable */
+ 
+     if (s == NULL) {
+@@ -144,6 +190,7 @@ ulg updcrc(s, n)
+     }
+     crc = c;
+     return c ^ 0xffffffffL;       /* (instead of ~c for 64-bit machines) */
++#endif
+ }
+ 
+ /* Return a current CRC value.  */
+@@ -253,9 +300,7 @@ void flush_outbuf()
+ {
+     if (outcnt == 0) return;
+ 
+-    if (!test)
+-      write_buf (ofd, outbuf, outcnt);
+-    bytes_out += (off_t)outcnt;
++    write_buf (ofd, outbuf, outcnt);
+     outcnt = 0;
+ }
+ 
+@@ -268,16 +313,13 @@ void flush_window()
+     if (outcnt == 0) return;
+     updcrc(window, outcnt);
+ 
+-    if (!test) {
+-        write_buf(ofd, (char *)window, outcnt);
+-    }
+-    bytes_out += (off_t)outcnt;
++    write_buf (ofd, window, outcnt);
+     outcnt = 0;
+ }
+ 
+ /* ===========================================================================
+- * Does the same as write(), but also handles partial pipe writes and checks
+- * for error return.
++ * Update the count of output bytes.  If testing, do not do any
++ * output.  Otherwise, write the buffer, checking for errors.
+  */
+ void write_buf(fd, buf, cnt)
+     int       fd;
+@@ -286,6 +328,10 @@ void write_buf(fd, buf, cnt)
+ {
+     unsigned  n;
+ 
++    bytes_out += cnt;
++    if (test)
++      return;
++
+     while ((n = write_buffer (fd, buf, cnt)) != cnt) {
+         if (n == (unsigned)(-1)) {
+             write_error();
+diff --git a/zdiff.in b/zdiff.in
+index a1325f2..3633398 100644
+--- a/zdiff.in
++++ b/zdiff.in
+@@ -48,51 +48,85 @@ escape='
+   $s/X$/'\''/
+ '
+ 
+-while :; do
+-  case $1 in
++filesonly=
++file1=
++file2=
++needop=
++
++for arg
++do
++  case $filesonly$needop$arg in
+   --h*) printf '%s\n' "$usage"   || exit 2; exit;;
+-  --v*) printf '%s\n' "$version" || exit 2; exit;;
+-  --) shift; break;;
+-  -*\'*) cmp="$cmp '"`printf '%sX\n' "$1" | sed "$escape"`;;
+-  -?*) cmp="$cmp '$1'";;
+-  *) break;;
++  --version) printf '%s\n' "$version" || exit 2; exit;;
++  --) filesonly=t;;
++  -*\'*) cmp="$cmp '"`printf '%sX\n' "$arg" | sed "$escape"`;;
++  -[CDFISUWXx]) needop="'$arg'";;
++  -?*) cmp="$cmp '$arg'";;
++  *) case $needop in
++     '') case $arg in
++         '') printf >&2 '%s\n' "$0: empty file name"; exit 2;;
++         esac
++         case $file1 in
++         '') file1=$arg;;
++         *) case $file2 in
++            '') file2=$arg;;
++            *) printf >&2 '%s\n' "$0: extra operand '$arg'"; exit 2;;
++            esac;;
++         esac;;
++     *) cmp="$cmp $needop '$arg'"
++        needop=;;
++     esac;;
+   esac
+-  shift
+ done
++case $needop in
++'') ;;
++*) printf >&2 '%s\n' "$0: $prevarg: option requires an argument -- $needop"
++   exit 2;;
++esac
++
+ cmp="$cmp --"
+ 
+-for file
+-do
+-  test "X$file" = X- || <"$file" || exit 2
+-done
++case $file1 in
++'') printf >&2 '%s\n' "$0: missing operand"; exit 2;;
++-) ;;
++*) <"$file1" || exit 2;;
++esac
++case $file2 in
++''|-) ;;
++*) <"$file2" || exit 2;;
++esac
+ 
+ gzip_status=0
+ exec 3>&1
+ 
+-if test $# -eq 1; then
+-  case $1 in
++case $file2 in
++'')
++  case $file1 in
+   *[-.]gz* | *[-.][zZ] | *.t[ga]z)
+-    FILE=`expr "X$1" : 'X\(.*\)[-.][zZtga]*$'`
++    FILE=`expr "X$file1" : 'X\(.*\)[-.][zZtga]*$'`
+     gzip_status=$(
+       exec 4>&1
+-      (gzip -cd -- "$1" 4>&-; echo $? >&4) 3>&- | eval "$cmp" - '"$FILE"' >&3
++      (gzip -cd -- "$file1" 4>&-; echo $? >&4) 3>&- |
++        eval "$cmp" - '"$FILE"' >&3
+     );;
+   *)
+-    printf >&2 '%s\n' "$0: $1: unknown compressed file extension"
++    printf >&2 '%s\n' "$0: $file1: unknown compressed file extension"
+     exit 2;;
+-  esac
+-elif test $# -eq 2; then
+-        case "$1" in
++  esac;;
++*)
++  case $file1,$file2 in
++  -,-)
++        gzip_status=$(
++          exec 4>&1
++          (gzip -cdfq - 4>&-; echo $? >&4) 3>&- |
++            eval "$cmp" - - >&3
++        );;
++  *)
++        case $file1 in
+         *[-.]gz* | *[-.][zZ] | *.t[ga]z | -)
+-                case "$2" in
++                case $file2 in
+                 *[-.]gz* | *[-.][zZ] | *.t[ga]z | -)
+-                    if test "$1$2" = --; then
+-                        gzip_status=$(
+-                          exec 4>&1
+-                          (gzip -cdfq - 4>&-; echo $? >&4) 3>&- |
+-                            eval "$cmp" - - >&3
+-                        )
+-                    elif
++                    if
+                         # Reject Solaris 8's buggy /bin/bash 2.03.
+                         echo X |
+                          (echo X | eval "$cmp" /dev/fd/5 - >/dev/null 2>&1) \
+@@ -100,8 +134,9 @@ elif test $# -eq 2; then
+                     then
+                         gzip_status=$(
+                           exec 4>&1
+-                          (gzip -cdfq -- "$1" 4>&-; echo $? >&4) 3>&- |
+-                            ( (gzip -cdfq -- "$2" 4>&-; echo $? >&4) 3>&- 5<&- </dev/null |
++                          (gzip -cdfq -- "$file1" 4>&-; echo $? >&4) 3>&- |
++                              ((gzip -cdfq -- "$file2" 4>&-
++                                echo $? >&4) 3>&- 5<&- </dev/null |
+                                eval "$cmp" /dev/fd/5 - >&3) 5<&0
+                         )
+                         cmp_status=$?
+@@ -128,10 +163,10 @@ elif test $# -eq 2; then
+                           set -C
+                           tmp=${TMPDIR}zdiff$$
+                         fi
+-                        gzip -cdfq -- "$2" > "$tmp" || exit 2
++                        gzip -cdfq -- "$file2" > "$tmp" || exit 2
+                         gzip_status=$(
+                           exec 4>&1
+-                          (gzip -cdfq -- "$1" 4>&-; echo $? >&4) 3>&- |
++                          (gzip -cdfq -- "$file1" 4>&-; echo $? >&4) 3>&- |
+                             eval "$cmp" - '"$tmp"' >&3
+                         )
+                         cmp_status=$?
+@@ -142,25 +177,22 @@ elif test $# -eq 2; then
+                 *)
+                     gzip_status=$(
+                       exec 4>&1
+-                      (gzip -cdfq -- "$1" 4>&-; echo $? >&4) 3>&- |
+-                        eval "$cmp" - '"$2"' >&3
++                      (gzip -cdfq -- "$file1" 4>&-; echo $? >&4) 3>&- |
++                        eval "$cmp" - '"$file2"' >&3
+                     );;
+                 esac;;
+-        *)      case "$2" in
++        *)      case $file2 in
+                 *[-.]gz* | *[-.][zZ] | *.t[ga]z | -)
+                         gzip_status=$(
+                           exec 4>&1
+-                          (gzip -cdfq -- "$2" 4>&-; echo $? >&4) 3>&- |
+-                            eval "$cmp" '"$1"' - >&3
++                          (gzip -cdfq -- "$file2" 4>&-; echo $? >&4) 3>&- |
++                            eval "$cmp" '"$file1"' - >&3
+                         );;
+-                *)	eval "$cmp" '"$1"' '"$2"';;
++                *)	eval "$cmp" '"$file1"' '"$file2"';;
+                 esac;;
+-        esac
+-else
+-        printf >&2 '%s\n' \
+-          "$0: invalid number of operands; try \`$0 --help' for help"
+-        exit 2
+-fi
++        esac;;
++  esac;;
++esac
+ 
+ cmp_status=$?
+ test "$gzip_status" -eq 0 || exit 2
+diff --git a/zgrep.in b/zgrep.in
+index 5e384bd..5ecc8b9 100644
+--- a/zgrep.in
++++ b/zgrep.in
+@@ -220,14 +220,11 @@ do
+       case $i in
+       (*'
+ '* | *'&'* | *'\'* | *'|'*)
+-        i=$(printf '%s\n' "$i" |
+-            sed '
+-              $!N
+-              $s/[&\|]/\\&/g
+-              $s/\n/\\n/g
+-            ');;
++          icolon=$(printf '%s\n' "$i:" |
++                     sed -e 's/[&\|]/\\&/g' -e '$!s/$/\\/');;
++      (*) icolon="$i:";;
+       esac
+-      sed_script="s|^|$i:|"
++      sed_script="s|^|$icolon|"
+ 
+       # Fail if grep or sed fails.
+       r=$(

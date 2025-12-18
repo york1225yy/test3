@@ -1,0 +1,1279 @@
+diff --git a/bash-completion/su b/bash-completion/su
+index 3095050..913e445 100644
+--- a/bash-completion/su
++++ b/bash-completion/su
+@@ -41,7 +41,7 @@ _su_module()
+ 	esac
+ 	local IFS=$'\n'
+ 	compopt -o filenames
+-	COMPREPLY=( $(compgen -f -- $cur) )
++	COMPREPLY=( $(compgen -u -- $cur) )
+ 	return 0
+ }
+ complete -F _su_module su
+diff --git a/disk-utils/fdisk.c b/disk-utils/fdisk.c
+index af2afed..cbb698c 100644
+--- a/disk-utils/fdisk.c
++++ b/disk-utils/fdisk.c
+@@ -928,7 +928,7 @@ int main(int argc, char **argv)
+ 		{ "type",           required_argument, NULL, 't' },
+ 		{ "units",          optional_argument, NULL, 'u' },
+ 		{ "version",        no_argument,       NULL, 'V' },
+-		{ "output",         no_argument,       NULL, 'o' },
++		{ "output",         required_argument, NULL, 'o' },
+ 		{ "protect-boot",   no_argument,       NULL, 'B' },
+ 		{ "wipe",           required_argument, NULL, 'w' },
+ 		{ "wipe-partitions",required_argument, NULL, 'W' },
+diff --git a/disk-utils/fsck.c b/disk-utils/fsck.c
+index d53ff21..b6c6c7c 100644
+--- a/disk-utils/fsck.c
++++ b/disk-utils/fsck.c
+@@ -730,6 +730,8 @@ static int kill_all(int signum)
+ 	for (inst = instance_list; inst; inst = inst->next) {
+ 		if (inst->flags & FLAG_DONE)
+ 			continue;
++		if (inst->pid <= 0)
++			continue;
+ 		kill(inst->pid, signum);
+ 		n++;
+ 	}
+diff --git a/disk-utils/partx.c b/disk-utils/partx.c
+index 07b3e28..7687290 100644
+--- a/disk-utils/partx.c
++++ b/disk-utils/partx.c
+@@ -1013,6 +1013,7 @@ int main(int argc, char **argv)
+ 				errx(EXIT_FAILURE, _("%s: partitioned loop devices unsupported"),
+ 				     wholedisk);
+ 			assoc_loopdev(wholedisk);
++			free(wholedisk);
+ 			wholedisk = xstrdup(lc.device);
+ 		} else if (!S_ISBLK(x.st_mode))
+ 			errx(EXIT_FAILURE, _("%s: not a block device"), wholedisk);
+@@ -1061,6 +1062,8 @@ int main(int argc, char **argv)
+ 		blkid_free_probe(pr);
+ 	}
+ 
++	free(wholedisk);
++
+ 	if (loopdev)
+ 		loopcxt_deinit(&lc);
+ 
+diff --git a/disk-utils/sfdisk.c b/disk-utils/sfdisk.c
+index 526d090..65256c8 100644
+--- a/disk-utils/sfdisk.c
++++ b/disk-utils/sfdisk.c
+@@ -418,7 +418,7 @@ static int move_partition_data(struct sfdisk *sf, size_t partno, struct fdisk_pa
+ 		warnx(_("failed to get start of the old partition; ignoring --move-data"));
+ 	else if (fdisk_partition_get_start(pa) == fdisk_partition_get_start(orig_pa))
+ 		warnx(_("start of the partition has not been moved; ignoring --move-data"));
+-	else if (fdisk_partition_get_size(orig_pa) < fdisk_partition_get_size(pa))
++	else if (fdisk_partition_get_size(orig_pa) > fdisk_partition_get_size(pa))
+ 		warnx(_("new partition is smaller than original; ignoring --move-data"));
+ 	else
+ 		ok = 1;
+@@ -1714,7 +1714,7 @@ static void refresh_prompt_buffer(struct sfdisk *sf, const char *devname,
+  */
+ static int command_fdisk(struct sfdisk *sf, int argc, char **argv)
+ {
+-	int rc = 0, partno = sf->partno, created = 0, unused = 0;
++	int rc = 0, partno = sf->partno, created = 0, unused = 0, ignored = 0;
+ 	struct fdisk_script *dp;
+ 	struct fdisk_table *tb = NULL;
+ 	const char *devname = NULL, *label;
+@@ -1897,6 +1897,7 @@ static int command_fdisk(struct sfdisk *sf, int argc, char **argv)
+ 			if (ignore_partition(pa)) {
+ 				fdisk_info(sf->cxt, _("Ignoring partition."));
+ 				next_partno++;
++				ignored++;
+ 				continue;
+ 			}
+ 			if (!created) {		/* create a new disklabel */
+@@ -1960,7 +1961,7 @@ static int command_fdisk(struct sfdisk *sf, int argc, char **argv)
+ 	/* create empty disk label if label, but no partition specified */
+ 	if ((rc == SFDISK_DONE_EOF || rc == SFDISK_DONE_WRITE) && created == 0
+ 	    && fdisk_script_has_force_label(dp) == 1
+-	    && fdisk_table_get_nents(tb) == 0
++	    && fdisk_table_get_nents(tb) == (size_t) ignored
+ 	    && fdisk_script_get_header(dp, "label")) {
+ 
+ 		int xrc = fdisk_apply_script_headers(sf->cxt, dp);
+diff --git a/include/list.h b/include/list.h
+index 96c84e5..b6bbbdd 100644
+--- a/include/list.h
++++ b/include/list.h
+@@ -208,6 +208,25 @@ _INLINE_ void list_splice(struct list_head *list, struct list_head *head)
+ 	for (pos = (head)->next, pnext = pos->next; pos != (head); \
+ 	     pos = pnext, pnext = pos->next)
+ 
++/**
++ * list_free - remove all entries from list and call freefunc()
++ *             for each entry
++ * @head:       the head for your list
++ * @type:       the type of the struct this is embedded in.
++ * @member:     the name of the list_struct within the struct.
++ * @freefunc:   the list entry deallocator
++ */
++#define list_free(head, type, member, freefunc)				\
++	do {								\
++		struct list_head *__p, *__pnext;			\
++									\
++		list_for_each_safe (__p, __pnext, (head)) {		\
++			type *__elt = list_entry(__p, type, member);	\
++			list_del(__p);					\
++			freefunc(__elt);			\
++		}							\
++	} while (0)
++
+ _INLINE_ size_t list_count_entries(struct list_head *head)
+ {
+ 	struct list_head *pos;
+diff --git a/include/pty-session.h b/include/pty-session.h
+index 09eff43..3242992 100644
+--- a/include/pty-session.h
++++ b/include/pty-session.h
+@@ -98,6 +98,7 @@ void ul_pty_set_child(struct ul_pty *pty, pid_t child);
+ struct ul_pty_callbacks *ul_pty_get_callbacks(struct ul_pty *pty);
+ int ul_pty_is_running(struct ul_pty *pty);
+ int ul_pty_setup(struct ul_pty *pty);
++int ul_pty_signals_setup(struct ul_pty *pty);
+ void ul_pty_cleanup(struct ul_pty *pty);
+ int ul_pty_chownmod_slave(struct ul_pty *pty, uid_t uid, gid_t gid, mode_t mode);
+ void ul_pty_init_slave(struct ul_pty *pty);
+diff --git a/include/strutils.h b/include/strutils.h
+index 6e95707..a84d295 100644
+--- a/include/strutils.h
++++ b/include/strutils.h
+@@ -106,8 +106,8 @@ static inline char *mem2strcpy(char *dest, const void *src, size_t n, size_t nma
+ 	if (n + 1 > nmax)
+ 		n = nmax - 1;
+ 
++	memset(dest, '\0', nmax);
+ 	memcpy(dest, src, n);
+-	dest[nmax-1] = '\0';
+ 	return dest;
+ }
+ 
+diff --git a/lib/blkdev.c b/lib/blkdev.c
+index c22853d..2d02fb8 100644
+--- a/lib/blkdev.c
++++ b/lib/blkdev.c
+@@ -222,8 +222,10 @@ int blkdev_get_sector_size(int fd __attribute__((__unused__)), int *sector_size)
+ #ifdef BLKPBSZGET
+ int blkdev_get_physector_size(int fd, int *sector_size)
+ {
+-	if (ioctl(fd, BLKPBSZGET, &sector_size) >= 0)
++	if (ioctl(fd, BLKPBSZGET, sector_size) >= 0)
++    {
+ 		return 0;
++    }
+ 	return -1;
+ }
+ #else
+diff --git a/lib/path.c b/lib/path.c
+index 21f9bd1..c9ea5ad 100644
+--- a/lib/path.c
++++ b/lib/path.c
+@@ -350,10 +350,12 @@ int ul_path_stat(struct path_cxt *pc, struct stat *sb, const char *path)
+ 		int dir = ul_path_get_dirfd(pc);
+ 		if (dir < 0)
+ 			return dir;
+-		if (*path == '/')
+-			path++;
+-
+-		rc = fstatat(dir, path, sb, 0);
++		if (path) {
++			if  (*path == '/')
++				path++;
++			rc = fstatat(dir, path, sb, 0);
++		} else
++			rc = fstat(dir, sb);	/* dir itself */
+ 
+ 		if (rc && errno == ENOENT
+ 		    && pc->redirect_on_enoent
+@@ -666,14 +668,17 @@ int ul_path_readf_string(struct path_cxt *pc, char **str, const char *path, ...)
+ int ul_path_read_buffer(struct path_cxt *pc, char *buf, size_t bufsz, const char *path)
+ {
+ 	int rc = ul_path_read(pc, buf, bufsz - 1, path);
+-	if (rc < 0)
+-		return rc;
+ 
+-	/* Remove tailing newline (usual in sysfs) */
+-	if (rc > 0 && *(buf + rc - 1) == '\n')
+-		buf[--rc] = '\0';
+-	else
+-		buf[rc - 1] = '\0';
++	if (rc == 0)
++		buf[0] = '\0';
++
++	else if (rc > 0) {
++		/* Remove tailing newline (usual in sysfs) */
++		if (*(buf + rc - 1) == '\n')
++			buf[--rc] = '\0';
++		else
++			buf[rc - 1] = '\0';
++	}
+ 
+ 	return rc;
+ }
+diff --git a/lib/pty-session.c b/lib/pty-session.c
+index 6f038e1..d89dfbb 100644
+--- a/lib/pty-session.c
++++ b/lib/pty-session.c
+@@ -149,12 +149,12 @@ static void pty_signals_cleanup(struct ul_pty *pty)
+ int ul_pty_setup(struct ul_pty *pty)
+ {
+ 	struct termios attrs;
+-	sigset_t ourset;
+ 	int rc = 0;
+ 
+ 	assert(pty->sigfd == -1);
+ 
+-	/* save the current signals setting */
++	/* save the current signals setting (to make ul_pty_cleanup() usable,
++	 * otherwise see ul_pty_signals_setup() */
+ 	sigprocmask(0, NULL, &pty->orgsig);
+ 
+ 	if (pty->isterm) {
+@@ -198,6 +198,26 @@ int ul_pty_setup(struct ul_pty *pty)
+ 		tcsetattr(pty->slave, TCSANOW, &attrs);
+ 	}
+ 
++done:
++	if (rc)
++		ul_pty_cleanup(pty);
++
++	DBG(SETUP, ul_debugobj(pty, "pty setup done [master=%d, slave=%d, rc=%d]",
++				pty->master, pty->slave, rc));
++	return rc;
++}
++
++/* call me before fork() */
++int ul_pty_signals_setup(struct ul_pty *pty)
++{
++	sigset_t ourset;
++	int rc = 0;
++
++	assert(pty->sigfd == -1);
++
++	/* save the current signals setting */
++	sigprocmask(0, NULL, &pty->orgsig);
++
+ 	sigfillset(&ourset);
+ 	if (sigprocmask(SIG_BLOCK, &ourset, NULL)) {
+ 		rc = -errno;
+@@ -221,8 +241,7 @@ done:
+ 	if (rc)
+ 		ul_pty_cleanup(pty);
+ 
+-	DBG(SETUP, ul_debugobj(pty, "pty setup done [master=%d, slave=%d, rc=%d]",
+-				pty->master, pty->slave, rc));
++	DBG(SETUP, ul_debugobj(pty, "pty signals setup done [rc=%d]", rc));
+ 	return rc;
+ }
+ 
+@@ -692,6 +711,8 @@ int main(int argc, char *argv[])
+ 
+ 	if (ul_pty_setup(pty))
+ 		err(EXIT_FAILURE, "failed to create pseudo-terminal");
++	if (ul_pty_signals_setup(pty))
++		err(EXIT_FAILURE, "failed to initialize signals handler");
+ 
+ 	fflush(stdout);			/* ??? */
+ 
+diff --git a/libblkid/src/partitions/bsd.c b/libblkid/src/partitions/bsd.c
+index c745173..7a0b231 100644
+--- a/libblkid/src/partitions/bsd.c
++++ b/libblkid/src/partitions/bsd.c
+@@ -50,7 +50,7 @@ static int probe_bsd_pt(blkid_probe pr, const struct blkid_idmag *mag)
+ 		goto nothing;
+ 	}
+ 
+-	l = (struct bsd_disklabel *) data + BLKID_MAG_LASTOFFSET(mag);
++	l = (struct bsd_disklabel *) (data + BLKID_MAG_LASTOFFSET(mag));
+ 
+ 	ls = blkid_probe_get_partlist(pr);
+ 	if (!ls)
+diff --git a/libblkid/src/partitions/mac.c b/libblkid/src/partitions/mac.c
+index 092d31d..75a558b 100644
+--- a/libblkid/src/partitions/mac.c
++++ b/libblkid/src/partitions/mac.c
+@@ -93,6 +93,8 @@ static int probe_mac_pt(blkid_probe pr,
+ 	}
+ 
+ 	block_size = be16_to_cpu(md->block_size);
++	if (block_size < sizeof(struct mac_partition))
++		goto nothing;
+ 
+ 	/* The partition map always begins at physical block 1,
+ 	 * the second block on the disk.
+diff --git a/libblkid/src/probe.c b/libblkid/src/probe.c
+index 5f01bc3..85052a7 100644
+--- a/libblkid/src/probe.c
++++ b/libblkid/src/probe.c
+@@ -612,6 +612,11 @@ static int hide_buffer(blkid_probe pr, uint64_t off, uint64_t len)
+ 	struct list_head *p;
+ 	int ct = 0;
+ 
++	if (UINT64_MAX - len < off) {
++		DBG(BUFFER, ul_debug("\t  hide-buffer overflow (ignore)"));
++		return -EINVAL;
++	}
++
+ 	list_for_each(p, &pr->buffers) {
+ 		struct blkid_bufinfo *x =
+ 			list_entry(p, struct blkid_bufinfo, bufs);
+@@ -647,14 +652,20 @@ unsigned char *blkid_probe_get_buffer(blkid_probe pr, uint64_t off, uint64_t len
+ 	DBG(BUFFER, ul_debug("\t>>>> off=%ju, real-off=%ju (probe <%ju..%ju>, len=%ju",
+ 				off, real_off, pr->off, pr->off + pr->size, len));
+ 	*/
+-
+ 	if (pr->size == 0) {
+ 		errno = EINVAL;
+ 		return NULL;
+ 	}
+ 
+-	if (len == 0 || (!S_ISCHR(pr->mode) && pr->off + pr->size < real_off + len)) {
+-		DBG(BUFFER, ul_debug("\t  ignore: request out of probing area"));
++	if (UINT64_MAX - len < off || UINT64_MAX - len < real_off) {
++		DBG(BUFFER, ul_debug("\t  read-buffer overflow (ignore)"));
++		return NULL;
++	}
++
++	if (len == 0
++	    || (!S_ISCHR(pr->mode) && (pr->size < off || pr->size < len))
++	    || (!S_ISCHR(pr->mode) && (pr->off + pr->size < real_off + len))) {
++		DBG(BUFFER, ul_debug("\t  read-buffer out of probing area (ignore)"));
+ 		errno = 0;
+ 		return NULL;
+ 	}
+@@ -1298,7 +1309,8 @@ int blkid_do_wipe(blkid_probe pr, int dryrun)
+ 		/* wipen on device */
+ 		if (write_all(fd, buf, len))
+ 			return -1;
+-		fsync(fd);
++		if (fsync(fd) != 0)
++				return -1;
+ 		pr->flags &= ~BLKID_FL_MODIF_BUFF;	/* be paranoid */
+ 
+ 		return blkid_probe_step_back(pr);
+diff --git a/libblkid/src/superblocks/exfat.c b/libblkid/src/superblocks/exfat.c
+index f586ec7..323e375 100644
+--- a/libblkid/src/superblocks/exfat.c
++++ b/libblkid/src/superblocks/exfat.c
+@@ -101,7 +101,7 @@ static struct exfat_entry_label *find_label(blkid_probe pr,
+ 			return (struct exfat_entry_label *) entry;
+ 
+ 		offset += EXFAT_ENTRY_SIZE;
+-		if (offset % CLUSTER_SIZE(sb) == 0) {
++		if (CLUSTER_SIZE(sb) && (offset % CLUSTER_SIZE(sb)) == 0) {
+ 			cluster = next_cluster(pr, sb, cluster);
+ 			if (cluster < EXFAT_FIRST_DATA_CLUSTER)
+ 				return NULL;
+diff --git a/libblkid/src/superblocks/hfs.c b/libblkid/src/superblocks/hfs.c
+index ebf90e4..fceab95 100644
+--- a/libblkid/src/superblocks/hfs.c
++++ b/libblkid/src/superblocks/hfs.c
+@@ -173,7 +173,10 @@ static int probe_hfs(blkid_probe pr, const struct blkid_idmag *mag)
+ 
+ 	hfs_set_uuid(pr, hfs->finder_info.id, sizeof(hfs->finder_info.id));
+ 
+-	blkid_probe_set_label(pr, hfs->label, hfs->label_len);
++	size = hfs->label_len;
++	if ((size_t) size > sizeof(hfs->label))
++		size = sizeof(hfs->label);
++	blkid_probe_set_label(pr, hfs->label, size);
+ 	return 0;
+ }
+ 
+diff --git a/libblkid/src/superblocks/ocfs.c b/libblkid/src/superblocks/ocfs.c
+index 463ed7b..e630fb0 100644
+--- a/libblkid/src/superblocks/ocfs.c
++++ b/libblkid/src/superblocks/ocfs.c
+@@ -129,10 +129,12 @@ static int probe_ocfs(blkid_probe pr, const struct blkid_idmag *mag)
+ 		blkid_probe_set_value(pr, "SEC_TYPE",
+ 				(unsigned char *) "ntocfs", sizeof("ntocfs"));
+ 
+-	blkid_probe_set_label(pr, (unsigned char *) ovl.label,
+-				ocfslabellen(ovl));
+-	blkid_probe_set_value(pr, "MOUNT", (unsigned char *) ovh.mount,
+-				ocfsmountlen(ovh));
++	if (ocfslabellen(ovl) < sizeof(ovl.label))
++		blkid_probe_set_label(pr, (unsigned char *) ovl.label,
++					ocfslabellen(ovl));
++	if (ocfsmountlen(ovh) < sizeof(ovh.mount))
++		blkid_probe_set_value(pr, "MOUNT", (unsigned char *) ovh.mount,
++					ocfsmountlen(ovh));
+ 	blkid_probe_set_uuid(pr, ovl.vol_id);
+ 	blkid_probe_sprintf_version(pr, "%u.%u", maj, min);
+ 	return 0;
+diff --git a/libblkid/src/topology/dm.c b/libblkid/src/topology/dm.c
+index b210a80..77146e2 100644
+--- a/libblkid/src/topology/dm.c
++++ b/libblkid/src/topology/dm.c
+@@ -34,10 +34,10 @@ static int probe_dm_tp(blkid_probe pr,
+ 		"/usr/sbin/dmsetup",
+ 		"/sbin/dmsetup"
+ 	};
+-	int dmpipe[] = { -1, -1 }, stripes, stripesize;
++	int dmpipe[] = { -1, -1 }, stripes = 0, stripesize = 0;
+ 	const char *cmd = NULL;
+ 	FILE *stream = NULL;
+-	long long  offset, size;
++	long long  offset = 0, size = 0;
+ 	size_t i;
+ 	dev_t devno = blkid_probe_get_devno(pr);
+ 
+@@ -103,6 +103,10 @@ static int probe_dm_tp(blkid_probe pr,
+ 	if (!stream)
+ 		goto nothing;
+ 
++	if (dmpipe[1] != -1) {
++		close(dmpipe[1]);
++	}
++
+ 	if (fscanf(stream, "%lld %lld striped %d %d ",
+ 			&offset, &size, &stripes, &stripesize) != 0)
+ 		goto nothing;
+@@ -111,7 +115,6 @@ static int probe_dm_tp(blkid_probe pr,
+ 	blkid_topology_set_optimal_io_size(pr, (stripes * stripesize) << 9);
+ 
+ 	fclose(stream);
+-	close(dmpipe[1]);
+ 	return 0;
+ 
+ nothing:
+@@ -119,8 +122,6 @@ nothing:
+ 		fclose(stream);
+ 	else if (dmpipe[0] != -1)
+ 		close(dmpipe[0]);
+-	if (dmpipe[1] != -1)
+-		close(dmpipe[1]);
+ 	return 1;
+ }
+ 
+diff --git a/libfdisk/src/ask.c b/libfdisk/src/ask.c
+index 31f95fb..274f6ba 100644
+--- a/libfdisk/src/ask.c
++++ b/libfdisk/src/ask.c
+@@ -36,6 +36,10 @@ int fdisk_set_ask(struct fdisk_context *cxt,
+ struct fdisk_ask *fdisk_new_ask(void)
+ {
+ 	struct fdisk_ask *ask = calloc(1, sizeof(struct fdisk_ask));
++
++	if (!ask)
++		return NULL;
++
+ 	DBG(ASK, ul_debugobj(ask, "alloc"));
+ 	ask->refcount = 1;
+ 	return ask;
+diff --git a/libfdisk/src/item.c b/libfdisk/src/item.c
+index 86fa0fb..671f9ad 100644
+--- a/libfdisk/src/item.c
++++ b/libfdisk/src/item.c
+@@ -40,6 +40,9 @@ struct fdisk_labelitem *fdisk_new_labelitem(void)
+ {
+ 	struct fdisk_labelitem *li = calloc(1, sizeof(*li));
+ 
++	if (!li)
++		return NULL;
++
+ 	li->refcount = 1;
+ 	DBG(ITEM, ul_debugobj(li, "alloc"));
+ 	return li;
+diff --git a/libfdisk/src/parttype.c b/libfdisk/src/parttype.c
+index 3a5db9c..271b671 100644
+--- a/libfdisk/src/parttype.c
++++ b/libfdisk/src/parttype.c
+@@ -26,6 +26,9 @@ struct fdisk_parttype *fdisk_new_parttype(void)
+ {
+ 	struct fdisk_parttype *t = calloc(1, sizeof(*t));
+ 
++	if (!t)
++		return NULL;
++
+ 	t->refcount = 1;
+ 	t->flags = FDISK_PARTTYPE_ALLOCATED;
+ 	DBG(PARTTYPE, ul_debugobj(t, "alloc"));
+diff --git a/libmount/src/context_umount.c b/libmount/src/context_umount.c
+index 173637a..773355f 100644
+--- a/libmount/src/context_umount.c
++++ b/libmount/src/context_umount.c
+@@ -453,10 +453,7 @@ static int is_fuse_usermount(struct libmnt_context *cxt, int *errsv)
+ 	struct libmnt_ns *ns_old;
+ 	const char *type = mnt_fs_get_fstype(cxt->fs);
+ 	const char *optstr;
+-	char *user_id = NULL;
+-	size_t sz;
+-	uid_t uid;
+-	char uidstr[sizeof(stringify_value(ULONG_MAX))];
++	uid_t uid, entry_uid;
+ 
+ 	*errsv = 0;
+ 
+@@ -474,10 +471,7 @@ static int is_fuse_usermount(struct libmnt_context *cxt, int *errsv)
+ 	if (!optstr)
+ 		return 0;
+ 
+-	if (mnt_optstr_get_option(optstr, "user_id", &user_id, &sz) != 0)
+-		return 0;
+-
+-	if (sz == 0 || user_id == NULL)
++	if (mnt_optstr_get_uid(optstr, "user_id", &entry_uid) != 0)
+ 		return 0;
+ 
+ 	/* get current user */
+@@ -494,8 +488,7 @@ static int is_fuse_usermount(struct libmnt_context *cxt, int *errsv)
+ 		return 0;
+ 	}
+ 
+-	snprintf(uidstr, sizeof(uidstr), "%lu", (unsigned long) uid);
+-	return strncmp(user_id, uidstr, sz) == 0;
++	return uid == entry_uid;
+ }
+ 
+ /*
+diff --git a/libmount/src/mountP.h b/libmount/src/mountP.h
+index d43a835..22442ec 100644
+--- a/libmount/src/mountP.h
++++ b/libmount/src/mountP.h
+@@ -399,6 +399,7 @@ extern const struct libmnt_optmap *mnt_optmap_get_entry(
+ 			     const struct libmnt_optmap **mapent);
+ 
+ /* optstr.c */
++extern int mnt_optstr_get_uid(const char *optstr, const char *name, uid_t *uid);
+ extern int mnt_optstr_remove_option_at(char **optstr, char *begin, char *end);
+ extern int mnt_optstr_fix_gid(char **optstr, char *value, size_t valsz, char **next);
+ extern int mnt_optstr_fix_uid(char **optstr, char *value, size_t valsz, char **next);
+diff --git a/libmount/src/optstr.c b/libmount/src/optstr.c
+index 921b931..97fd6da 100644
+--- a/libmount/src/optstr.c
++++ b/libmount/src/optstr.c
+@@ -908,12 +908,16 @@ int mnt_optstr_fix_secontext(char **optstr,
+ 
+ 	/* create a quoted string from the raw context */
+ 	sz = strlen((char *) raw);
+-	if (!sz)
++	if (!sz) {
++		freecon(raw);
+ 		return -EINVAL;
++	}
+ 
+ 	p = val = malloc(valsz + 3);
+-	if (!val)
++	if (!val) {
++		freecon(raw);
+ 		return -ENOMEM;
++	}
+ 
+ 	*p++ = '"';
+ 	memcpy(p, raw, sz);
+@@ -1076,6 +1080,48 @@ int mnt_optstr_fix_user(char **optstr)
+ 	return rc;
+ }
+ 
++/*
++ * Converts value from @optstr addressed by @name to uid.
++ *
++ * Returns: 0 on success, 1 if not found, <0 on error
++ */
++int mnt_optstr_get_uid(const char *optstr, const char *name, uid_t *uid)
++{
++	char *value = NULL;
++	size_t valsz = 0;
++	char buf[sizeof(stringify_value(UINT64_MAX))];
++	int rc;
++	uint64_t num;
++
++	assert(optstr);
++	assert(name);
++	assert(uid);
++
++	rc = mnt_optstr_get_option(optstr, name, &value, &valsz);
++	if (rc != 0)
++		goto fail;
++
++	if (valsz > sizeof(buf) - 1) {
++		rc = -ERANGE;
++		goto fail;
++	}
++	mem2strcpy(buf, value, valsz, sizeof(buf));
++
++	rc = ul_strtou64(buf, &num, 10);
++	if (rc != 0)
++		goto fail;
++	if (num > ULONG_MAX || (uid_t) num != num) {
++		rc = -ERANGE;
++		goto fail;
++	}
++	*uid = (uid_t) num;
++
++	return 0;
++fail:
++	DBG(UTILS, ul_debug("failed to convert '%s'= to number [rc=%d]", name, rc));
++	return rc;
++}
++
+ /**
+  * mnt_match_options:
+  * @optstr: options string
+diff --git a/libmount/src/tab_parse.c b/libmount/src/tab_parse.c
+index 917779a..4407f9c 100644
+--- a/libmount/src/tab_parse.c
++++ b/libmount/src/tab_parse.c
+@@ -227,11 +227,6 @@ static int mnt_parse_mountinfo_line(struct libmnt_fs *fs, const char *s)
+ 		goto fail;
+ 	}
+ 
+-	/* remove "\040(deleted)" suffix */
+-	p = (char *) endswith(fs->target, PATH_DELETED_SUFFIX);
+-	if (p && *p)
+-		*p = '\0';
+-
+ 	s = skip_separator(s);
+ 
+ 	/* (6) vfs options (fs-independent) */
+diff --git a/login-utils/login.c b/login-utils/login.c
+index c6cd340..c9f6d59 100644
+--- a/login-utils/login.c
++++ b/login-utils/login.c
+@@ -513,6 +513,7 @@ static void init_tty(struct login_context *cxt)
+ {
+ 	struct stat st;
+ 	struct termios tt, ttt;
++	struct winsize ws;
+ 
+ 	cxt->tty_mode = (mode_t) getlogindefs_num("TTYPERM", TTY_MODE);
+ 
+@@ -543,6 +544,12 @@ static void init_tty(struct login_context *cxt)
+ 	}
+ #endif
+ 
++	/* The TTY size might be reset to 0x0 by the kernel when we close the stdin/stdout/stderr file
++	 * descriptors so let's save the size now so we can reapply it later */
++	memset(&ws, 0, sizeof(struct winsize));
++	if (ioctl(STDIN_FILENO, TIOCGWINSZ, &ws) < 0)
++		syslog(LOG_WARNING, _("TIOCGWINSZ ioctl failed: %m"));
++
+ 	tcgetattr(0, &tt);
+ 	ttt = tt;
+ 	ttt.c_cflag &= ~HUPCL;
+@@ -574,6 +581,11 @@ static void init_tty(struct login_context *cxt)
+ 
+ 	/* restore tty modes */
+ 	tcsetattr(0, TCSAFLUSH, &tt);
++
++	/* Restore tty size */
++	if (ws.ws_row > 0 || ws.ws_col > 0)
++		if (ioctl(STDIN_FILENO, TIOCSWINSZ, &ws) < 0)
++			syslog(LOG_WARNING, _("TIOCSWINSZ ioctl failed: %m"));
+ }
+ 
+ /*
+@@ -662,7 +674,7 @@ static void log_lastlog(struct login_context *cxt)
+ 	sa.sa_handler = SIG_IGN;
+ 	sigaction(SIGXFSZ, &sa, &oldsa_xfsz);
+ 
+-	fd = open(_PATH_LASTLOG, O_RDWR, 0);
++	fd = open(_PATH_LASTLOG, O_RDWR | O_CREAT, 0);
+ 	if (fd < 0)
+ 		goto done;
+ 	offset = cxt->pwd->pw_uid * sizeof(ll);
+diff --git a/login-utils/lslogins.c b/login-utils/lslogins.c
+index 9431a50..1f071c8 100644
+--- a/login-utils/lslogins.c
++++ b/login-utils/lslogins.c
+@@ -225,7 +225,7 @@ static const struct lslogins_coldesc coldescs[] =
+ {
+ 	[COL_USER]          = { "USER",		N_("user name"), N_("Username"), 0.1, SCOLS_FL_NOEXTREMES },
+ 	[COL_UID]           = { "UID",		N_("user ID"), "UID", 1, SCOLS_FL_RIGHT},
+-	[COL_PWDEMPTY]      = { "PWD-EMPTY",	N_("password not required"), N_("Password not required"), 1, SCOLS_FL_RIGHT },
++	[COL_PWDEMPTY]      = { "PWD-EMPTY",	N_("password not defined"), N_("Password not required (empty)"), 1, SCOLS_FL_RIGHT },
+ 	[COL_PWDDENY]       = { "PWD-DENY",	N_("login by password disabled"), N_("Login by password disabled"), 1, SCOLS_FL_RIGHT },
+ 	[COL_PWDLOCK]       = { "PWD-LOCK",	N_("password defined, but locked"), N_("Password is locked"), 1, SCOLS_FL_RIGHT },
+ 	[COL_PWDMETHOD]     = { "PWD-METHOD",   N_("password encryption method"), N_("Password encryption method"), 0.1 },
+@@ -820,23 +820,42 @@ static struct lslogins_user *get_user_info(struct lslogins_control *ctl, const c
+ 			break;
+ 		case COL_PWDEMPTY:
+ 			if (shadow) {
+-				if (!*shadow->sp_pwdp) /* '\0' */
++				const char *p = shadow->sp_pwdp;
++
++				while (p && (*p == '!' || *p == '*'))
++					p++;
++
++				if (!p || !*p)
+ 					user->pwd_empty = STATUS_TRUE;
+ 			} else
+ 				user->pwd_empty = STATUS_UNKNOWN;
+ 			break;
+ 		case COL_PWDDENY:
+ 			if (shadow) {
+-				if ((*shadow->sp_pwdp == '!' ||
+-				     *shadow->sp_pwdp == '*') &&
+-				    !valid_pwd(shadow->sp_pwdp + 1))
++				const char *p = shadow->sp_pwdp;
++
++				while (p && (*p == '!' || *p == '*'))
++					p++;
++
++				if (p && *p && p != shadow->sp_pwdp && !valid_pwd(p))
+ 					user->pwd_deny = STATUS_TRUE;
+ 			} else
+ 				user->pwd_deny = STATUS_UNKNOWN;
+ 			break;
+ 		case COL_PWDLOCK:
+ 			if (shadow) {
+-				if (*shadow->sp_pwdp == '!' && valid_pwd(shadow->sp_pwdp + 1))
++				const char *p = shadow->sp_pwdp;
++				int i = 0;
++
++				/* 'passwd --lock' uses two exclamation marks,
++				 * shadow(5) describes the lock as "field which
++				 * starts with an exclamation mark". Let's
++				 * support more '!' ...
++				 */
++				while (p && *p == '!')
++					p++, i++;
++
++				if (i != 0 && (!*p || valid_pwd(p)))
+ 					user->pwd_lock = STATUS_TRUE;
+ 			} else
+ 				user->pwd_lock = STATUS_UNKNOWN;
+@@ -845,7 +864,7 @@ static struct lslogins_user *get_user_info(struct lslogins_control *ctl, const c
+ 			if (shadow) {
+ 				const char *p = shadow->sp_pwdp;
+ 
+-				if (*p == '!' || *p == '*')
++				while (p && (*p == '!' || *p == '*'))
+ 					p++;
+ 				user->pwd_method = get_pwd_method(p, NULL, NULL);
+ 			} else
+diff --git a/login-utils/su-common.c b/login-utils/su-common.c
+index afd0ea8..46dc116 100644
+--- a/login-utils/su-common.c
++++ b/login-utils/su-common.c
+@@ -536,6 +536,8 @@ static void create_watching_parent(struct su_context *su)
+ 		/* create pty */
+ 		if (ul_pty_setup(su->pty))
+ 			err(EXIT_FAILURE, _("failed to create pseudo-terminal"));
++		if (ul_pty_signals_setup(su->pty))
++			err(EXIT_FAILURE, _("failed to initialize signals handler"));
+ 	}
+ #endif
+ 	fflush(stdout);			/* ??? */
+diff --git a/login-utils/vipw.c b/login-utils/vipw.c
+index f178c8f..bf76f51 100644
+--- a/login-utils/vipw.c
++++ b/login-utils/vipw.c
+@@ -353,6 +353,7 @@ int main(int argc, char *argv[])
+ 		 * which means they can be translated. */
+ 		printf(_("Would you like to edit %s now [y/n]? "), orig_file);
+ 
++		fflush(stdout);
+ 		if (fgets(response, sizeof(response), stdin) &&
+ 		    rpmatch(response) == RPMATCH_YES)
+ 			edit_file(1);
+diff --git a/misc-utils/logger.c b/misc-utils/logger.c
+index 5b122de..0f2a849 100644
+--- a/misc-utils/logger.c
++++ b/misc-utils/logger.c
+@@ -920,8 +920,6 @@ static void logger_open(struct logger_ctl *ctl)
+ 		ctl->tag = xgetlogin();
+ 	if (!ctl->tag)
+ 		ctl->tag = "<someone>";
+-
+-	generate_syslog_header(ctl);
+ }
+ 
+ /* re-open; usually after failed connection */
+@@ -971,13 +969,9 @@ static void logger_stdin(struct logger_ctl *ctl)
+ {
+ 	/* note: we re-generate the syslog header for each log message to
+ 	 * update header timestamps and to reflect possible priority changes.
+-	 * The initial header is generated by logger_open().
+ 	 */
+-	int has_header = 1;
+ 	int default_priority = ctl->pri;
+-	int last_pri = default_priority;
+-	size_t max_usrmsg_size = ctl->max_message_size - strlen(ctl->hdr);
+-	char *const buf = xmalloc(max_usrmsg_size + 2 + 2);
++	char *buf = xmalloc(ctl->max_message_size + 2 + 2);
+ 	int pri;
+ 	int c;
+ 	size_t i;
+@@ -997,33 +991,25 @@ static void logger_stdin(struct logger_ctl *ctl)
+ 			if (c == '>' && 0 <= pri && pri <= 191) {
+ 				/* valid RFC PRI values */
+ 				i = 0;
+-				if (pri < 8)	/* kern facility is forbidden */
+-					pri |= 8;
++				if ((pri & LOG_FACMASK) == 0)
++					pri |= (default_priority & LOG_FACMASK);
+ 				ctl->pri = pri;
+ 			} else
+ 				ctl->pri = default_priority;
+ 
+-			if (ctl->pri != last_pri) {
+-				has_header = 0;
+-				max_usrmsg_size =
+-				    ctl->max_message_size - strlen(ctl->hdr);
+-				last_pri = ctl->pri;
+-			}
+ 			if (c != EOF && c != '\n')
+ 				c = getchar();
+ 		}
+ 
+-		while (c != EOF && c != '\n' && i < max_usrmsg_size) {
++		while (c != EOF && c != '\n' && i < ctl->max_message_size) {
+ 			buf[i++] = c;
+ 			c = getchar();
+ 		}
+ 		buf[i] = '\0';
+ 
+ 		if (i > 0 || !ctl->skip_empty_lines) {
+-			if (!has_header)
+-				generate_syslog_header(ctl);
++			generate_syslog_header(ctl);
+ 			write_output(ctl, buf);
+-			has_header = 0;
+ 		}
+ 
+ 		if (c == '\n')	/* discard line terminator */
+@@ -1299,12 +1285,14 @@ int main(int argc, char **argv)
+ 		abort();
+ 	}
+ 	logger_open(&ctl);
+-	if (0 < argc)
++	if (0 < argc) {
++		generate_syslog_header(&ctl);
+ 		logger_command_line(&ctl, argv);
+-	else
++	} else
+ 		/* Note. --file <arg> reopens stdin making the below
+ 		 * function to be used for file inputs. */
+ 		logger_stdin(&ctl);
++
+ 	logger_close(&ctl);
+ 	return EXIT_SUCCESS;
+ }
+diff --git a/misc-utils/lsblk-devtree.c b/misc-utils/lsblk-devtree.c
+index ce9d3e8..6f9dc54 100644
+--- a/misc-utils/lsblk-devtree.c
++++ b/misc-utils/lsblk-devtree.c
+@@ -282,8 +282,25 @@ void lsblk_unref_devtree(struct lsblk_devtree *tr)
+ 	}
+ }
+ 
++static int has_root(struct lsblk_devtree *tr, struct lsblk_device *dev)
++{
++	struct lsblk_iter itr;
++	struct lsblk_device *x = NULL;
++
++	lsblk_reset_iter(&itr, LSBLK_ITER_FORWARD);
++
++	while (lsblk_devtree_next_root(tr, &itr, &x) == 0) {
++		if (x == dev)
++			return 1;
++	}
++	return 0;
++}
++
+ int lsblk_devtree_add_root(struct lsblk_devtree *tr, struct lsblk_device *dev)
+ {
++	if (has_root(tr, dev))
++		return 0;
++
+ 	if (!lsblk_devtree_has_device(tr, dev))
+ 		lsblk_devtree_add_device(tr, dev);
+ 
+diff --git a/misc-utils/mcookie.c b/misc-utils/mcookie.c
+index 3157401..be5c34a 100644
+--- a/misc-utils/mcookie.c
++++ b/misc-utils/mcookie.c
+@@ -65,7 +65,7 @@ static uint64_t hash_file(struct mcookie_control *ctl, int fd)
+ 			rdsz = wanted - count;
+ 
+ 		r = read_all(fd, (char *) buf, rdsz);
+-		if (r < 0)
++		if (r <= 0)
+ 			break;
+ 		ul_MD5Update(&ctl->ctx, buf, r);
+ 		count += r;
+diff --git a/misc-utils/wipefs.c b/misc-utils/wipefs.c
+index 78dc63e..f08a9ba 100644
+--- a/misc-utils/wipefs.c
++++ b/misc-utils/wipefs.c
+@@ -615,7 +615,9 @@ static int do_wipe(struct wipe_control *ctl)
+ 	if (need_force)
+ 		warnx(_("Use the --force option to force erase."));
+ 
+-	fsync(blkid_probe_get_fd(pr));
++	if (fsync(blkid_probe_get_fd(pr)) != 0)
++		err(EXIT_FAILURE, _("%s: cannot flush modified buffers"),
++				ctl->devname);
+ 
+ #ifdef BLKRRPART
+ 	if (reread && (mode & O_EXCL)) {
+@@ -635,7 +637,9 @@ static int do_wipe(struct wipe_control *ctl)
+ 	}
+ #endif
+ 
+-	close(blkid_probe_get_fd(pr));
++	if (close(blkid_probe_get_fd(pr)) != 0)
++		err(EXIT_FAILURE, _("%s: close device failed"), ctl->devname);
++
+ 	blkid_free_probe(pr);
+ 	free(backup);
+ 	return 0;
+diff --git a/schedutils/taskset.c b/schedutils/taskset.c
+index 56db817..20aa4b7 100644
+--- a/schedutils/taskset.c
++++ b/schedutils/taskset.c
+@@ -117,7 +117,7 @@ static void do_taskset(struct taskset *ts, size_t setsize, cpu_set_t *set)
+ 	/* read the current mask */
+ 	if (ts->pid) {
+ 		if (sched_getaffinity(ts->pid, ts->setsize, ts->set) < 0)
+-			err_affinity(ts->pid, 1);
++			err_affinity(ts->pid, 0);
+ 		print_affinity(ts, FALSE);
+ 	}
+ 
+diff --git a/sys-utils/chcpu.c b/sys-utils/chcpu.c
+index c4e5bc7..527bce5 100644
+--- a/sys-utils/chcpu.c
++++ b/sys-utils/chcpu.c
+@@ -383,6 +383,7 @@ int main(int argc, char *argv[])
+ 		break;
+ 	}
+ 
++	CPU_FREE(cpu_set);
+ 	ul_unref_path(sys);
+ 
+ 	return rc == 0 ? EXIT_SUCCESS :
+diff --git a/sys-utils/losetup.c b/sys-utils/losetup.c
+index 56de4cc..cddbcc5 100644
+--- a/sys-utils/losetup.c
++++ b/sys-utils/losetup.c
+@@ -239,7 +239,7 @@ static int set_scols_data(struct loopdev_cxt *lc, struct libscols_line *ln)
+ 			p = loopcxt_get_device(lc);
+ 			break;
+ 		case COL_BACK_FILE:
+-			p = loopcxt_get_backing_file(lc);
++			np = loopcxt_get_backing_file(lc);
+ 			break;
+ 		case COL_OFFSET:
+ 			if (loopcxt_get_offset(lc, &x) == 0)
+diff --git a/sys-utils/lsns.c b/sys-utils/lsns.c
+index 8e25ff1..baa80bd 100644
+--- a/sys-utils/lsns.c
++++ b/sys-utils/lsns.c
+@@ -953,6 +953,28 @@ static int show_namespace_processes(struct lsns *ls, struct lsns_namespace *ns)
+ 	return 0;
+ }
+ 
++static void free_lsns_process(struct lsns_process *lsns_p)
++{
++	free(lsns_p);
++}
++
++static void free_netnsid_caches(struct netnsid_cache *cache)
++{
++	free(cache);
++}
++
++static void free_lsns_namespace(struct lsns_namespace *lsns_n)
++{
++	free(lsns_n);
++}
++
++static void free_all(struct lsns *ls)
++{
++	list_free(&ls->processes, struct lsns_process, processes, free_lsns_process);
++	list_free(&netnsids_cache, struct netnsid_cache, netnsids, free_netnsid_caches);
++	list_free(&ls->namespaces, struct lsns_namespace, namespaces, free_lsns_namespace);
++}
++
+ static void __attribute__((__noreturn__)) usage(void)
+ {
+ 	FILE *out = stdout;
+@@ -1162,5 +1184,8 @@ int main(int argc, char *argv[])
+ 	if (netlink_fd >= 0)
+ 		close(netlink_fd);
+ 	free_idcache(uid_cache);
++	
++	free_all(&ls);
++
+ 	return r == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+ }
+diff --git a/sys-utils/unshare.c b/sys-utils/unshare.c
+index e5627d3..820691b 100644
+--- a/sys-utils/unshare.c
++++ b/sys-utils/unshare.c
+@@ -650,8 +650,11 @@ int main(int argc, char *argv[])
+ 		err(EXIT_FAILURE, _("cannot chdir to '%s'"), newdir);
+ 
+ 	if (procmnt) {
+-		if (!newroot && mount("none", procmnt, NULL, MS_PRIVATE|MS_REC, NULL) != 0)
+-			err(EXIT_FAILURE, _("cannot change %s filesystem propagation"), procmnt);
++		if (!newroot && mount("none", procmnt, NULL, MS_PRIVATE|MS_REC, NULL))
++			/* custom procmnt means that proc is very likely not mounted, causing EINVAL
++			   ignoring the error in this specific instance is safe */
++			if(errno != EINVAL)
++				err(EXIT_FAILURE, _("cannot change %s filesystem propagation"), procmnt);
+ 		if (mount("proc", procmnt, "proc", MS_NOSUID|MS_NOEXEC|MS_NODEV, NULL) != 0)
+ 			err(EXIT_FAILURE, _("mount %s failed"), procmnt);
+ 	}
+diff --git a/term-utils/script.c b/term-utils/script.c
+index c8b55c8..be2c935 100644
+--- a/term-utils/script.c
++++ b/term-utils/script.c
+@@ -938,13 +938,16 @@ int main(int argc, char **argv)
+ 		printf(_(".\n"));
+ 	}
+ 
+-#ifdef HAVE_LIBUTEMPTER
+-	utempter_add_record(ul_pty_get_childfd(ctl.pty), NULL);
+-#endif
+ 
+ 	if (ul_pty_setup(ctl.pty))
+ 		err(EXIT_FAILURE, _("failed to create pseudo-terminal"));
+ 
++#ifdef HAVE_LIBUTEMPTER
++	utempter_add_record(ul_pty_get_childfd(ctl.pty), NULL);
++#endif
++
++	if (ul_pty_signals_setup(ctl.pty))
++		err(EXIT_FAILURE, _("failed to initialize signals handler"));
+ 	fflush(stdout);
+ 
+ 	/*
+diff --git a/term-utils/scriptlive.c b/term-utils/scriptlive.c
+index 37f092c..d25ab77 100644
+--- a/term-utils/scriptlive.c
++++ b/term-utils/scriptlive.c
+@@ -294,6 +294,8 @@ main(int argc, char *argv[])
+ 
+ 	if (ul_pty_setup(ss.pty))
+ 		err(EXIT_FAILURE, _("failed to create pseudo-terminal"));
++	if (ul_pty_signals_setup(ss.pty))
++		err(EXIT_FAILURE, _("failed to initialize signals handler"));
+ 
+ 	fflush(stdout);			/* ??? */
+ 
+diff --git a/tests/expected/findmnt/filter-options b/tests/expected/findmnt/filter-options
+index 2606bce..97b0ead 100644
+--- a/tests/expected/findmnt/filter-options
++++ b/tests/expected/findmnt/filter-options
+@@ -28,5 +28,4 @@ TARGET                       SOURCE           FSTYPE                OPTIONS
+ /home/kzak/.gvfs             gvfs-fuse-daemon fuse.gvfs-fuse-daemon rw,nosuid,nodev,relatime,user_id=500,group_id=500
+ /var/lib/nfs/rpc_pipefs      sunrpc           rpc_pipefs            rw,relatime
+ /mnt/sounds                  //foo.home/bar/  cifs                  rw,relatime,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+-/mnt/foo                     /fooooo          bar                   rw,relatime
+ rc=0
+diff --git a/tests/expected/findmnt/filter-options-nameval-neg b/tests/expected/findmnt/filter-options-nameval-neg
+index 5471d65..f0467ef 100644
+--- a/tests/expected/findmnt/filter-options-nameval-neg
++++ b/tests/expected/findmnt/filter-options-nameval-neg
+@@ -29,6 +29,5 @@ TARGET                         SOURCE                FSTYPE                OPTIO
+ |-/home/kzak                   /dev/mapper/kzak-home ext4                  rw,noatime,barrier=1,data=ordered
+ | `-/home/kzak/.gvfs           gvfs-fuse-daemon      fuse.gvfs-fuse-daemon rw,nosuid,nodev,relatime,user_id=500,group_id=500
+ |-/var/lib/nfs/rpc_pipefs      sunrpc                rpc_pipefs            rw,relatime
+-|-/mnt/sounds                  //foo.home/bar/       cifs                  rw,relatime,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+-`-/mnt/foo                     /fooooo               bar                   rw,relatime
++`-/mnt/sounds                  //foo.home/bar/       cifs                  rw,relatime,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+ rc=0
+diff --git a/tests/expected/findmnt/filter-types-neg b/tests/expected/findmnt/filter-types-neg
+index 2606bce..97b0ead 100644
+--- a/tests/expected/findmnt/filter-types-neg
++++ b/tests/expected/findmnt/filter-types-neg
+@@ -28,5 +28,4 @@ TARGET                       SOURCE           FSTYPE                OPTIONS
+ /home/kzak/.gvfs             gvfs-fuse-daemon fuse.gvfs-fuse-daemon rw,nosuid,nodev,relatime,user_id=500,group_id=500
+ /var/lib/nfs/rpc_pipefs      sunrpc           rpc_pipefs            rw,relatime
+ /mnt/sounds                  //foo.home/bar/  cifs                  rw,relatime,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+-/mnt/foo                     /fooooo          bar                   rw,relatime
+ rc=0
+diff --git a/tests/expected/findmnt/outputs-default b/tests/expected/findmnt/outputs-default
+index 5949579..0159935 100644
+--- a/tests/expected/findmnt/outputs-default
++++ b/tests/expected/findmnt/outputs-default
+@@ -30,6 +30,5 @@ TARGET                         SOURCE                FSTYPE                OPTIO
+ |-/home/kzak                   /dev/mapper/kzak-home ext4                  rw,noatime,barrier=1,data=ordered
+ | `-/home/kzak/.gvfs           gvfs-fuse-daemon      fuse.gvfs-fuse-daemon rw,nosuid,nodev,relatime,user_id=500,group_id=500
+ |-/var/lib/nfs/rpc_pipefs      sunrpc                rpc_pipefs            rw,relatime
+-|-/mnt/sounds                  //foo.home/bar/       cifs                  rw,relatime,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+-`-/mnt/foo                     /fooooo               bar                   rw,relatime
++`-/mnt/sounds                  //foo.home/bar/       cifs                  rw,relatime,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+ rc=0
+diff --git a/tests/expected/findmnt/outputs-force-tree b/tests/expected/findmnt/outputs-force-tree
+index 5949579..0159935 100644
+--- a/tests/expected/findmnt/outputs-force-tree
++++ b/tests/expected/findmnt/outputs-force-tree
+@@ -30,6 +30,5 @@ TARGET                         SOURCE                FSTYPE                OPTIO
+ |-/home/kzak                   /dev/mapper/kzak-home ext4                  rw,noatime,barrier=1,data=ordered
+ | `-/home/kzak/.gvfs           gvfs-fuse-daemon      fuse.gvfs-fuse-daemon rw,nosuid,nodev,relatime,user_id=500,group_id=500
+ |-/var/lib/nfs/rpc_pipefs      sunrpc                rpc_pipefs            rw,relatime
+-|-/mnt/sounds                  //foo.home/bar/       cifs                  rw,relatime,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+-`-/mnt/foo                     /fooooo               bar                   rw,relatime
++`-/mnt/sounds                  //foo.home/bar/       cifs                  rw,relatime,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+ rc=0
+diff --git a/tests/expected/findmnt/outputs-kernel b/tests/expected/findmnt/outputs-kernel
+index 5949579..0159935 100644
+--- a/tests/expected/findmnt/outputs-kernel
++++ b/tests/expected/findmnt/outputs-kernel
+@@ -30,6 +30,5 @@ TARGET                         SOURCE                FSTYPE                OPTIO
+ |-/home/kzak                   /dev/mapper/kzak-home ext4                  rw,noatime,barrier=1,data=ordered
+ | `-/home/kzak/.gvfs           gvfs-fuse-daemon      fuse.gvfs-fuse-daemon rw,nosuid,nodev,relatime,user_id=500,group_id=500
+ |-/var/lib/nfs/rpc_pipefs      sunrpc                rpc_pipefs            rw,relatime
+-|-/mnt/sounds                  //foo.home/bar/       cifs                  rw,relatime,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+-`-/mnt/foo                     /fooooo               bar                   rw,relatime
++`-/mnt/sounds                  //foo.home/bar/       cifs                  rw,relatime,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+ rc=0
+diff --git a/tests/expected/libmount/tabdiff-mount b/tests/expected/libmount/tabdiff-mount
+index 420aeac..3c18f8d 100644
+--- a/tests/expected/libmount/tabdiff-mount
++++ b/tests/expected/libmount/tabdiff-mount
+@@ -1,3 +1,2 @@
+ /dev/mapper/kzak-home on /home/kzak: MOUNTED
+-/fooooo on /mnt/foo: MOUNTED
+ tmpfs on /mnt/test/foobar: MOUNTED
+diff --git a/tests/expected/libmount/tabdiff-move b/tests/expected/libmount/tabdiff-move
+index 24f9bc7..95820d9 100644
+--- a/tests/expected/libmount/tabdiff-move
++++ b/tests/expected/libmount/tabdiff-move
+@@ -1,3 +1,2 @@
+ //foo.home/bar/ on /mnt/music: MOVED to /mnt/music
+-/fooooo on /mnt/foo: UMOUNTED
+ tmpfs on /mnt/test/foobar: UMOUNTED
+diff --git a/tests/expected/libmount/tabdiff-remount b/tests/expected/libmount/tabdiff-remount
+index 82ebeab..876bfd9 100644
+--- a/tests/expected/libmount/tabdiff-remount
++++ b/tests/expected/libmount/tabdiff-remount
+@@ -1,4 +1,3 @@
+ /dev/mapper/kzak-home on /home/kzak: REMOUNTED from 'rw,noatime,barrier=1,data=ordered' to 'ro,noatime,barrier=1,data=ordered'
+ //foo.home/bar/ on /mnt/sounds: REMOUNTED from 'rw,relatime,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344' to 'ro,relatime,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344'
+-/fooooo on /mnt/foo: UMOUNTED
+ tmpfs on /mnt/test/foobar: UMOUNTED
+diff --git a/tests/expected/libmount/tabdiff-umount b/tests/expected/libmount/tabdiff-umount
+index a3e0fe4..c7be725 100644
+--- a/tests/expected/libmount/tabdiff-umount
++++ b/tests/expected/libmount/tabdiff-umount
+@@ -1,3 +1,2 @@
+ /dev/mapper/kzak-home on /home/kzak: UMOUNTED
+-/fooooo on /mnt/foo: UMOUNTED
+ tmpfs on /mnt/test/foobar: UMOUNTED
+diff --git a/tests/expected/libmount/tabfiles-parse-mountinfo b/tests/expected/libmount/tabfiles-parse-mountinfo
+index 47eb770..d5ba524 100644
+--- a/tests/expected/libmount/tabfiles-parse-mountinfo
++++ b/tests/expected/libmount/tabfiles-parse-mountinfo
+@@ -351,17 +351,6 @@ id:     47
+ parent: 20
+ devno:  0:38
+ ------ fs:
+-source: /fooooo
+-target: /mnt/foo
+-fstype: bar
+-optstr: rw,relatime
+-VFS-optstr: rw,relatime
+-FS-opstr: rw
+-root:   /
+-id:     48
+-parent: 20
+-devno:  0:39
+------- fs:
+ source: tmpfs
+ target: /mnt/test/foobar
+ fstype: tmpfs
+diff --git a/tests/expected/libmount/tabfiles-py-parse-mountinfo b/tests/expected/libmount/tabfiles-py-parse-mountinfo
+index 47eb770..d5ba524 100644
+--- a/tests/expected/libmount/tabfiles-py-parse-mountinfo
++++ b/tests/expected/libmount/tabfiles-py-parse-mountinfo
+@@ -351,17 +351,6 @@ id:     47
+ parent: 20
+ devno:  0:38
+ ------ fs:
+-source: /fooooo
+-target: /mnt/foo
+-fstype: bar
+-optstr: rw,relatime
+-VFS-optstr: rw,relatime
+-FS-opstr: rw
+-root:   /
+-id:     48
+-parent: 20
+-devno:  0:39
+------- fs:
+ source: tmpfs
+ target: /mnt/test/foobar
+ fstype: tmpfs
+diff --git a/tests/ts/findmnt/files/mountinfo b/tests/ts/findmnt/files/mountinfo
+index 475ea1a..ff1e664 100644
+--- a/tests/ts/findmnt/files/mountinfo
++++ b/tests/ts/findmnt/files/mountinfo
+@@ -30,4 +30,3 @@
+ 44 41 0:36 / /home/kzak/.gvfs rw,nosuid,nodev,relatime - fuse.gvfs-fuse-daemon gvfs-fuse-daemon rw,user_id=500,group_id=500
+ 45 20 0:37 / /var/lib/nfs/rpc_pipefs rw,relatime - rpc_pipefs sunrpc rw
+ 47 20 0:38 / /mnt/sounds rw,relatime - cifs //foo.home/bar/ rw,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+-48 20 0:39 / /mnt/foo\040(deleted) rw,relatime - bar /fooooo rw
+diff --git a/tests/ts/findmnt/files/mountinfo-nonroot b/tests/ts/findmnt/files/mountinfo-nonroot
+index e15b467..87b421d 100644
+--- a/tests/ts/findmnt/files/mountinfo-nonroot
++++ b/tests/ts/findmnt/files/mountinfo-nonroot
+@@ -29,4 +29,3 @@
+ 44 41 0:36 / /home/kzak/.gvfs rw,nosuid,nodev,relatime - fuse.gvfs-fuse-daemon gvfs-fuse-daemon rw,user_id=500,group_id=500
+ 45 20 0:37 / /var/lib/nfs/rpc_pipefs rw,relatime - rpc_pipefs sunrpc rw
+ 47 20 0:38 / /mnt/sounds rw,relatime - cifs //foo.home/bar/ rw,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+-48 20 0:39 / /mnt/foo\040(deleted) rw,relatime - bar /fooooo rw
+diff --git a/tests/ts/libmount/files/mountinfo b/tests/ts/libmount/files/mountinfo
+index c063071..2b01740 100644
+--- a/tests/ts/libmount/files/mountinfo
++++ b/tests/ts/libmount/files/mountinfo
+@@ -30,5 +30,4 @@
+ 44 41 0:36 / /home/kzak/.gvfs rw,nosuid,nodev,relatime - fuse.gvfs-fuse-daemon gvfs-fuse-daemon rw,user_id=500,group_id=500
+ 45 20 0:37 / /var/lib/nfs/rpc_pipefs rw,relatime - rpc_pipefs sunrpc rw
+ 47 20 0:38 / /mnt/sounds rw,relatime - cifs //foo.home/bar/ rw,unc=\\foo.home\bar,username=kzak,domain=SRGROUP,uid=0,noforceuid,gid=0,noforcegid,addr=192.168.111.1,posixpaths,serverino,acl,rsize=16384,wsize=57344
+-48 20 0:39 / /mnt/foo\040(deleted) rw,relatime - bar /fooooo rw
+ 49 20 0:56 / /mnt/test/foobar rw,relatime shared:323 - tmpfs tmpfs rw
+diff --git a/tests/ts/lsns/ioctl_ns b/tests/ts/lsns/ioctl_ns
+index ef63606..a979893 100755
+--- a/tests/ts/lsns/ioctl_ns
++++ b/tests/ts/lsns/ioctl_ns
+@@ -21,7 +21,7 @@ TS_DESC="ownership and hierarchy"
+ . $TS_TOPDIR/functions.sh
+ ts_init "$*"
+ 
+-# ts_skip_nonroot
++ts_skip_nonroot
+ grep -q '#define HAVE_LINUX_NSFS_H' ${top_builddir}/config.h || ts_skip "no ioctl_ns support"
+ 
+ [ -r /proc/self/ns/user ] || ts_skip "no USER namespace kernel support"
+diff --git a/tests/ts/misc/setarch b/tests/ts/misc/setarch
+index 6c872bf..99e068c 100755
+--- a/tests/ts/misc/setarch
++++ b/tests/ts/misc/setarch
+@@ -77,7 +77,12 @@ ts_finalize_subtest "$finmsg"
+ # conditional subtest
+ if [ "$uname26_seems_supported" = "yes" ]; then
+ ts_init_subtest uname26-version
+-	tmp=$($TS_CMD_SETARCH $ARCH --uname-2.6 uname -r)
++	rpm -qa | grep -q "uname-build-checks"
++	if [ $? -eq 0 ]; then
++		tmp=$($TS_CMD_SETARCH $ARCH --uname-2.6 uname.bin -r)
++	else
++		tmp=$($TS_CMD_SETARCH $ARCH --uname-2.6 uname -r)
++	fi
+ 	if echo "$tmp" | grep -q "^2\.6\."; then
+ 		echo "kernel version changed to 2.6" >> $TS_OUTPUT
+ 	else
+diff --git a/text-utils/column.c b/text-utils/column.c
+index 1bc90e8..f9878e4 100644
+--- a/text-utils/column.c
++++ b/text-utils/column.c
+@@ -814,6 +814,8 @@ int main(int argc, char **argv)
+ 		case 's':
+ 			free(ctl.input_separator);
+ 			ctl.input_separator = mbs_to_wcs(optarg);
++			if (!ctl.input_separator)
++				err(EXIT_FAILURE, _("failed to use input separator"));
+ 			ctl.greedy = 0;
+ 			break;
+ 		case 'T':

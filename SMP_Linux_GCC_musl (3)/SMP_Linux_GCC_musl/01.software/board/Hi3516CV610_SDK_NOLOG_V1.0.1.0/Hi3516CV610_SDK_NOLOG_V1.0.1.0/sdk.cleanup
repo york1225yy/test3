@@ -1,0 +1,24 @@
+#!/bin/bash
+
+source scripts/common.sh
+
+echo_info "Cleanup SDK" COLOR_YELLOW
+
+echo_info ""
+echo_warn "ALL THE SOURCE FILES WILL BE DELETED, FILES YOU MODIFIED/ADDED WILL BE LOST !!!"
+echo_info ""
+
+#echo_info "To continue, type 'Yes' and then press ENTER ..."
+
+#read choice
+#[ x$choice != xYes ] && exit 1
+
+set +e
+for tar_file in $(ls package/*.tgz)
+do
+    dir_name=${tar_file%.*}
+    dir_name=${dir_name#*/}
+    echo_info "cleanup ${dir_name}"
+    mkdir -p $dir_name
+    run_command_progress_float "rm ${dir_name} -frv" 0 "find ${dir_name} | wc -l"
+done

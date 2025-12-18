@@ -1,0 +1,29 @@
+#!/bin/bash
+
+source scripts/common.sh
+
+echo_info "Unpacking SDK" COLOR_YELLOW
+
+echo_warn "Be sure you have installed the cross-compiler. if not, install it first!"
+echo_warn "ALL THE SOURCE FILES WILL BE OVERWRITED, FILES YOU MODIFIED WILL BE LOST !!!"
+echo_info ""
+
+#echo_info "To continue, type 'Yes' and then press ENTER ..."
+
+#read choice
+#[ x$choice != xYes ] && exit 1
+
+#SDK_CHIP=
+#OS_TYPE=
+echo_info "OS_TYPE  =$OS_TYPE"
+echo_info "SDK_CHIP =$SDK_CHIP"
+
+set +e
+
+#echo_info "install cross toolchain"
+#./tools/toolchains/cross.install
+
+for tar_file in $(ls package/*.tgz)
+do
+    run_command_progress_tar $tar_file
+done

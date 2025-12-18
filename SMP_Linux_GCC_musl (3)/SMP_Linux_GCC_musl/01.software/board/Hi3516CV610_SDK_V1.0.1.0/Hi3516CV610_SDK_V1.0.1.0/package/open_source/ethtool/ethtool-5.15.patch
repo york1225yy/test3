@@ -1,0 +1,1017 @@
+diff --git a/Makefile.in b/Makefile.in
+index c849d51..18ce5f9 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -799,6 +799,7 @@ pdfdir = @pdfdir@
+ prefix = @prefix@
+ program_transform_name = @program_transform_name@
+ psdir = @psdir@
++runstatedir = @runstatedir@
+ sbindir = @sbindir@
+ sharedstatedir = @sharedstatedir@
+ srcdir = @srcdir@
+diff --git a/configure b/configure
+index 25be374..a7a084a 100755
+--- a/configure
++++ b/configure
+@@ -590,6 +590,8 @@ ac_subst_vars='am__EXEEXT_FALSE
+ am__EXEEXT_TRUE
+ LTLIBOBJS
+ LIBOBJS
++ETHTOOL_FD_VXLAN_FEATURE_FALSE
++ETHTOOL_FD_VXLAN_FEATURE_TRUE
+ ETHTOOL_ENABLE_NETLINK_FALSE
+ ETHTOOL_ENABLE_NETLINK_TRUE
+ MNL_LIBS
+@@ -671,6 +673,7 @@ infodir
+ docdir
+ oldincludedir
+ includedir
++runstatedir
+ localstatedir
+ sharedstatedir
+ sysconfdir
+@@ -699,6 +702,7 @@ enable_dependency_tracking
+ enable_pretty_dump
+ with_bash_completion_dir
+ enable_netlink
++enable_fd_vxlan
+ '
+       ac_precious_vars='build_alias
+ host_alias
+@@ -752,6 +756,7 @@ datadir='${datarootdir}'
+ sysconfdir='${prefix}/etc'
+ sharedstatedir='${prefix}/com'
+ localstatedir='${prefix}/var'
++runstatedir='${localstatedir}/run'
+ includedir='${prefix}/include'
+ oldincludedir='/usr/include'
+ docdir='${datarootdir}/doc/${PACKAGE_TARNAME}'
+@@ -1004,6 +1009,15 @@ do
+   | -silent | --silent | --silen | --sile | --sil)
+     silent=yes ;;
+ 
++  -runstatedir | --runstatedir | --runstatedi | --runstated \
++  | --runstate | --runstat | --runsta | --runst | --runs \
++  | --run | --ru | --r)
++    ac_prev=runstatedir ;;
++  -runstatedir=* | --runstatedir=* | --runstatedi=* | --runstated=* \
++  | --runstate=* | --runstat=* | --runsta=* | --runst=* | --runs=* \
++  | --run=* | --ru=* | --r=*)
++    runstatedir=$ac_optarg ;;
++
+   -sbindir | --sbindir | --sbindi | --sbind | --sbin | --sbi | --sb)
+     ac_prev=sbindir ;;
+   -sbindir=* | --sbindir=* | --sbindi=* | --sbind=* | --sbin=* \
+@@ -1141,7 +1155,7 @@ fi
+ for ac_var in	exec_prefix prefix bindir sbindir libexecdir datarootdir \
+ 		datadir sysconfdir sharedstatedir localstatedir includedir \
+ 		oldincludedir docdir infodir htmldir dvidir pdfdir psdir \
+-		libdir localedir mandir
++		libdir localedir mandir runstatedir
+ do
+   eval ac_val=\$$ac_var
+   # Remove trailing slashes.
+@@ -1294,6 +1308,7 @@ Fine tuning of the installation directories:
+   --sysconfdir=DIR        read-only single-machine data [PREFIX/etc]
+   --sharedstatedir=DIR    modifiable architecture-independent data [PREFIX/com]
+   --localstatedir=DIR     modifiable single-machine data [PREFIX/var]
++  --runstatedir=DIR       modifiable per-process data [LOCALSTATEDIR/run]
+   --libdir=DIR            object code libraries [EPREFIX/lib]
+   --includedir=DIR        C header files [PREFIX/include]
+   --oldincludedir=DIR     C header files for non-gcc [/usr/include]
+@@ -1339,6 +1354,7 @@ Optional Features:
+                           speeds up one-time build
+   --enable-pretty-dump	  enable registers, EEPROM and SFP pretty dumps (enabled by default)
+   --enable-netlink	  enable netlink interface (enabled by default)
++  --enable-fd-vxlan	  enable fd vxlan interface (enabled by default)
+ 
+ Optional Packages:
+   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
+@@ -4574,6 +4590,27 @@ else
+ fi
+ 
+ 
++# Check whether --enable-fd-vxlan was given.
++if test "${enable_fd_vxlan+set}" = set; then :
++  enableval=$enable_fd_vxlan;
++else
++  enable_fd_vxlan=no
++fi
++
++if test x$enable_fd_vxlan = xyes; then
++
++$as_echo "#define ETHTOOL_FD_VXLAN_FEATURE 1" >>confdefs.h
++
++fi
++ if test x$enable_fd_vxlan = xyes; then
++  ETHTOOL_FD_VXLAN_FEATURE_TRUE=
++  ETHTOOL_FD_VXLAN_FEATURE_FALSE='#'
++else
++  ETHTOOL_FD_VXLAN_FEATURE_TRUE='#'
++  ETHTOOL_FD_VXLAN_FEATURE_FALSE=
++fi
++
++
+ ac_config_files="$ac_config_files Makefile ethtool.spec ethtool.8"
+ 
+ cat >confcache <<\_ACEOF
+@@ -4725,6 +4762,10 @@ if test -z "${ETHTOOL_ENABLE_NETLINK_TRUE}" && test -z "${ETHTOOL_ENABLE_NETLINK
+   as_fn_error $? "conditional \"ETHTOOL_ENABLE_NETLINK\" was never defined.
+ Usually this means the macro was only invoked conditionally." "$LINENO" 5
+ fi
++if test -z "${ETHTOOL_FD_VXLAN_FEATURE_TRUE}" && test -z "${ETHTOOL_FD_VXLAN_FEATURE_FALSE}"; then
++  as_fn_error $? "conditional \"ETHTOOL_FD_VXLAN_FEATURE\" was never defined.
++Usually this means the macro was only invoked conditionally." "$LINENO" 5
++fi
+ 
+ : "${CONFIG_STATUS=./config.status}"
+ ac_write_fail=0
+diff --git a/configure.ac b/configure.ac
+index d49eda6..f8e3839 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -78,5 +78,15 @@ if test x$enable_netlink = xyes; then
+ fi
+ AM_CONDITIONAL([ETHTOOL_ENABLE_NETLINK], [test x$enable_netlink = xyes])
+ 
++AC_ARG_ENABLE(fd-vxlan,
++	      [  --enable-fd-vxlan	  enable fd vxlan interface (enabled by default)],
++	      ,
++	      enable_fd_vxlan=no)
++if test x$enable_fd_vxlan = xyes; then
++	AC_DEFINE(ETHTOOL_FD_VXLAN_FEATURE, 1,
++		  Define this to enable vxlan interface to support ethtool fd vxlan.)
++fi
++AM_CONDITIONAL([ETHTOOL_FD_VXLAN_FEATURE], [test x$enable_fd_vxlan = xyes])
++
+ AC_CONFIG_FILES([Makefile ethtool.spec ethtool.8])
+ AC_OUTPUT
+diff --git a/ethtool-config.h.in b/ethtool-config.h.in
+index 9bbf281..8d7e7b1 100644
+--- a/ethtool-config.h.in
++++ b/ethtool-config.h.in
+@@ -6,6 +6,9 @@
+ /* Define this to enable register, EEPROM and SFP pretty dumps. */
+ #undef ETHTOOL_ENABLE_PRETTY_DUMP
+ 
++/* Define this to enable vxlan interface to support ethtool fd vxlan. */
++#undef ETHTOOL_FD_VXLAN_FEATURE
++
+ /* Define to 1 if <linux/types.h> defines big-endian types */
+ #undef HAVE_BE_TYPES
+ 
+diff --git a/ethtool.8.in b/ethtool.8.in
+index d2c7e5c..af1c5bc 100644
+--- a/ethtool.8.in
++++ b/ethtool.8.in
+@@ -198,6 +198,8 @@ ethtool \- query or control network driver and hardware settings
+ .BN rx\-mini
+ .BN rx\-jumbo
+ .BN tx
++.BN rx\-buf\-len
++.BN tx\-push
+ .HP
+ .B ethtool \-i|\-\-driver
+ .I devname
+@@ -559,6 +561,12 @@ Changes the number of ring entries for the Rx Jumbo ring.
+ .TP
+ .BI tx \ N
+ Changes the number of ring entries for the Tx ring.
++.TP
++.BI rx\-buf\-len \ N
++Changes the size of a buffer in the Rx ring.
++.TP
++.BI tx\-push \ on|off
++Specifies whether TX push should be enabled.
+ .RE
+ .TP
+ .B \-i \-\-driver
+diff --git a/ethtool.c b/ethtool.c
+index 46887c7..7354d44 100644
+--- a/ethtool.c
++++ b/ethtool.c
+@@ -5009,6 +5009,7 @@ tunable_strings[__ETHTOOL_TUNABLE_COUNT][ETH_GSTRING_LEN] = {
+ 	[ETHTOOL_ID_UNSPEC]		= "Unspec",
+ 	[ETHTOOL_RX_COPYBREAK]		= "rx-copybreak",
+ 	[ETHTOOL_TX_COPYBREAK]		= "tx-copybreak",
++	[ETHTOOL_TX_COPYBREAK_BUF_SIZE] = "tx-buf-size",
+ 	[ETHTOOL_PFC_PREVENTION_TOUT]	= "pfc-prevention-tout",
+ };
+ 
+@@ -5048,6 +5049,11 @@ static struct ethtool_tunable_info tunables_info[] = {
+ 	  .size		= sizeof(u16),
+ 	  .type		= CMDL_U16,
+ 	},
++	{ .t_id         = ETHTOOL_TX_COPYBREAK_BUF_SIZE,
++	  .t_type_id    = ETHTOOL_TUNABLE_U32,
++	  .size         = sizeof(u32),
++	  .type         = CMDL_U32,
++	},
+ };
+ #define TUNABLES_INFO_SIZE	ARRAY_SIZE(tunables_info)
+ 
+@@ -5091,6 +5097,7 @@ static int do_stunable(struct cmd_context *ctx)
+ 		ret = send_ioctl(ctx, tuna);
+ 		if (ret) {
+ 			perror(tunable_strings[tuna->id]);
++			free(tuna);
+ 			return ret;
+ 		}
+ 		free(tuna);
+@@ -5168,6 +5175,7 @@ static int do_gtunable(struct cmd_context *ctx)
+ 			ret = send_ioctl(ctx, tuna);
+ 			if (ret) {
+ 				fprintf(stderr, "%s: Cannot get tunable\n", ts);
++				free(tuna);
+ 				return ret;
+ 			}
+ 			print_tunable(tuna);
+@@ -5724,6 +5732,8 @@ static const struct option args[] = {
+ 			  "		[ rx-mini N ]\n"
+ 			  "		[ rx-jumbo N ]\n"
+ 			  "		[ tx N ]\n"
++			  "		[ rx-buf-len N]\n"
++			  "		[ tx-push on|off]\n"
+ 	},
+ 	{
+ 		.opts	= "-k|--show-features|--show-offload",
+@@ -5813,7 +5823,12 @@ static const struct option args[] = {
+ 		.xhelp	= "		rx-flow-hash tcp4|udp4|ah4|esp4|sctp4|"
+ 			  "tcp6|udp6|ah6|esp6|sctp6 m|v|t|s|d|f|n|r... [context %d] |\n"
+ 			  "		flow-type ether|ip4|tcp4|udp4|sctp4|ah4|esp4|"
++#ifndef ETHTOOL_FD_VXLAN_FEATURE
+ 			  "ip6|tcp6|udp6|ah6|esp6|sctp6\n"
++#else
++			  "ip6|tcp6|udp6|ah6|esp6|sctp6|vxlan4|vxlan6\n"
++			  "			[ vni %d [m %x] ]\n"
++#endif
+ 			  "			[ src %x:%x:%x:%x:%x:%x [m %x:%x:%x:%x:%x:%x] ]\n"
+ 			  "			[ dst %x:%x:%x:%x:%x:%x [m %x:%x:%x:%x:%x:%x] ]\n"
+ 			  "			[ proto %d [m %x] ]\n"
+@@ -5960,6 +5975,7 @@ static const struct option args[] = {
+ 		.help	= "Get tunable",
+ 		.xhelp	= "		[ rx-copybreak ]\n"
+ 			  "		[ tx-copybreak ]\n"
++			  "		[ tx-buf-size ]\n"
+ 			  "		[ pfc-precention-tout ]\n"
+ 	},
+ 	{
+@@ -5968,6 +5984,7 @@ static const struct option args[] = {
+ 		.help	= "Set tunable",
+ 		.xhelp	= "		[ rx-copybreak N]\n"
+ 			  "		[ tx-copybreak N]\n"
++			  "		[ tx-buf-size N]\n"
+ 			  "		[ pfc-precention-tout N]\n"
+ 	},
+ 	{
+diff --git a/netlink/rings.c b/netlink/rings.c
+index b8c458f..3718c10 100644
+--- a/netlink/rings.c
++++ b/netlink/rings.c
+@@ -46,6 +46,8 @@ int rings_reply_cb(const struct nlmsghdr *nlhdr, void *data)
+ 	show_u32(tb[ETHTOOL_A_RINGS_RX_MINI], "RX Mini:\t");
+ 	show_u32(tb[ETHTOOL_A_RINGS_RX_JUMBO], "RX Jumbo:\t");
+ 	show_u32(tb[ETHTOOL_A_RINGS_TX], "TX:\t\t");
++	show_u32(tb[ETHTOOL_A_RINGS_RX_BUF_LEN], "RX Buf Len:\t\t");
++	show_bool("tx-push", "TX Push:\t%s\n", tb[ETHTOOL_A_RINGS_TX_PUSH]);
+ 
+ 	return MNL_CB_OK;
+ }
+@@ -98,6 +100,18 @@ static const struct param_parser sring_params[] = {
+ 		.handler	= nl_parse_direct_u32,
+ 		.min_argc	= 1,
+ 	},
++	{
++		.arg            = "rx-buf-len",
++		.type           = ETHTOOL_A_RINGS_RX_BUF_LEN,
++		.handler        = nl_parse_direct_u32,
++		.min_argc       = 1,
++	},
++	{
++		.arg            = "tx-push",
++		.type           = ETHTOOL_A_RINGS_TX_PUSH,
++		.handler        = nl_parse_u8bool,
++		.min_argc       = 1,
++	},
+ 	{}
+ };
+ 
+diff --git a/rxclass.c b/rxclass.c
+index 6cf81fd..a43506b 100644
+--- a/rxclass.c
++++ b/rxclass.c
+@@ -58,6 +58,24 @@ static void rxclass_print_ipv6_rule(__be32 *sip, __be32 *sipm, __be32 *dip,
+ 		tclass, tclassm);
+ }
+ 
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++static void rxclass_print_eth_rule(u8 *smac, u8 *smacm, u8 *dmac, u8 *dmacm,
++				   u16 eth_type, u16 eth_typem)
++{
++	fprintf(stdout,
++	"\tSrc MAC addr: %02X:%02X:%02X:%02X:%02X:%02X"
++	" mask: %02X:%02X:%02X:%02X:%02X:%02X\n"
++	"\tDest MAC addr: %02X:%02X:%02X:%02X:%02X:%02X"
++	" mask: %02X:%02X:%02X:%02X:%02X:%02X\n"
++	"\tEthertype: 0x%X mask: 0x%X\n",
++	smac[0], smac[1], smac[2], smac[3], smac[4], smac[5],
++	smacm[0], smacm[1], smacm[2], smacm[3], smacm[4], smacm[5],
++	dmac[0], dmac[1], dmac[2], dmac[3], dmac[4], dmac[5],
++	dmacm[0], dmacm[1], dmacm[2], dmacm[3], dmacm[4], dmacm[5],
++	eth_type, eth_typem);
++}
++#endif
++
+ static void rxclass_print_nfc_spec_ext(struct ethtool_rx_flow_spec *fsp)
+ {
+ 	if (fsp->flow_type & FLOW_EXT) {
+@@ -97,7 +115,9 @@ static void rxclass_print_nfc_spec_ext(struct ethtool_rx_flow_spec *fsp)
+ static void rxclass_print_nfc_rule(struct ethtool_rx_flow_spec *fsp,
+ 				   __u32 rss_context)
+ {
++#ifndef ETHTOOL_FD_VXLAN_FEATURE
+ 	unsigned char	*smac, *smacm, *dmac, *dmacm;
++#endif
+ 	__u32		flow_type;
+ 
+ 	fprintf(stdout,	"Filter: %d\n", fsp->location);
+@@ -163,6 +183,29 @@ static void rxclass_print_nfc_rule(struct ethtool_rx_flow_spec *fsp,
+ 			ntohl(fsp->h_u.usr_ip4_spec.l4_4_bytes),
+ 			ntohl(fsp->m_u.usr_ip4_spec.l4_4_bytes));
+ 		break;
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++	case VXLAN_V4_FLOW:
++		fprintf(stdout, "\tRule Type: Vxlan IPv4\n");
++		fprintf(stdout, "\tVni: %d mask: 0x%x\n",
++			ntohl(fsp->h_u.vxlan_ip4_spec.vni),
++			ntohl(fsp->m_u.vxlan_ip4_spec.vni));
++		rxclass_print_eth_rule(fsp->h_u.vxlan_ip4_spec.src,
++				       fsp->m_u.vxlan_ip4_spec.src,
++				       fsp->h_u.vxlan_ip4_spec.dst,
++				       fsp->m_u.vxlan_ip4_spec.dst,
++				       ntohs(fsp->h_u.vxlan_ip4_spec.eth_type),
++				       ntohs(fsp->m_u.vxlan_ip4_spec.eth_type));
++		rxclass_print_ipv4_rule(fsp->h_u.vxlan_ip4_spec.ip4src,
++					fsp->m_u.vxlan_ip4_spec.ip4src,
++					fsp->h_u.vxlan_ip4_spec.ip4dst,
++					fsp->m_u.vxlan_ip4_spec.ip4dst,
++					fsp->h_u.vxlan_ip4_spec.tos,
++					fsp->m_u.vxlan_ip4_spec.tos);
++		fprintf(stdout, "\tL4 protocol: %d mask: 0x%x\n",
++			fsp->h_u.vxlan_ip4_spec.l4_proto,
++			fsp->m_u.vxlan_ip4_spec.l4_proto);
++		break;
++#endif
+ 	case TCP_V6_FLOW:
+ 	case UDP_V6_FLOW:
+ 	case SCTP_V6_FLOW:
+@@ -219,7 +262,31 @@ static void rxclass_print_nfc_rule(struct ethtool_rx_flow_spec *fsp,
+ 			ntohl(fsp->h_u.usr_ip6_spec.l4_4_bytes),
+ 			ntohl(fsp->m_u.usr_ip6_spec.l4_4_bytes));
+ 		break;
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++	case VXLAN_V6_FLOW:
++		fprintf(stdout, "\tRule Type: Vxlan IPv6\n");
++		fprintf(stdout, "\tVni: %d mask: 0x%x\n",
++			ntohl(fsp->h_u.vxlan_ip6_spec.vni),
++			ntohl(fsp->m_u.vxlan_ip6_spec.vni));
++		rxclass_print_eth_rule(fsp->h_u.vxlan_ip6_spec.src,
++				       fsp->m_u.vxlan_ip6_spec.src,
++				       fsp->h_u.vxlan_ip6_spec.dst,
++				       fsp->m_u.vxlan_ip6_spec.dst,
++				       ntohs(fsp->h_u.vxlan_ip6_spec.eth_type),
++				       ntohs(fsp->m_u.vxlan_ip6_spec.eth_type));
++		rxclass_print_ipv6_rule(fsp->h_u.vxlan_ip6_spec.ip6src,
++					fsp->m_u.vxlan_ip6_spec.ip6src,
++					fsp->h_u.vxlan_ip6_spec.ip6dst,
++					fsp->m_u.vxlan_ip6_spec.ip6dst,
++					fsp->h_u.vxlan_ip6_spec.tclass,
++					fsp->m_u.vxlan_ip6_spec.tclass);
++		fprintf(stdout, "\tL4 Protocol: %d mask: 0x%x\n",
++			fsp->h_u.vxlan_ip6_spec.l4_proto,
++			fsp->m_u.vxlan_ip6_spec.l4_proto);
++		break;
++#endif
+ 	case ETHER_FLOW:
++#ifndef ETHTOOL_FD_VXLAN_FEATURE
+ 		dmac = fsp->h_u.ether_spec.h_dest;
+ 		dmacm = fsp->m_u.ether_spec.h_dest;
+ 		smac = fsp->h_u.ether_spec.h_source;
+@@ -239,6 +306,15 @@ static void rxclass_print_nfc_rule(struct ethtool_rx_flow_spec *fsp,
+ 			dmacm[4], dmacm[5],
+ 			ntohs(fsp->h_u.ether_spec.h_proto),
+ 			ntohs(fsp->m_u.ether_spec.h_proto));
++#else
++		fprintf(stdout, "\tFlow Type: Raw Ethernet\n");
++		rxclass_print_eth_rule(fsp->h_u.ether_spec.h_source,
++				       fsp->m_u.ether_spec.h_source,
++				       fsp->h_u.ether_spec.h_dest,
++				       fsp->m_u.ether_spec.h_dest,
++				       ntohs(fsp->h_u.ether_spec.h_proto),
++				       ntohs(fsp->m_u.ether_spec.h_proto));
++#endif
+ 		break;
+ 	default:
+ 		fprintf(stdout,
+@@ -285,12 +361,18 @@ static void rxclass_print_rule(struct ethtool_rx_flow_spec *fsp,
+ 	case SCTP_V4_FLOW:
+ 	case AH_V4_FLOW:
+ 	case ESP_V4_FLOW:
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++	case VXLAN_V4_FLOW:
++#endif
+ 	case TCP_V6_FLOW:
+ 	case UDP_V6_FLOW:
+ 	case SCTP_V6_FLOW:
+ 	case AH_V6_FLOW:
+ 	case ESP_V6_FLOW:
+ 	case IPV6_USER_FLOW:
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++	case VXLAN_V6_FLOW:
++#endif
+ 	case ETHER_FLOW:
+ 		rxclass_print_nfc_rule(fsp, rss_context);
+ 		break;
+@@ -633,6 +715,7 @@ typedef enum {
+ 	OPT_MAC,
+ } rule_opt_type_t;
+ 
++#ifndef ETHTOOL_FD_VXLAN_FEATURE
+ #define NFC_FLAG_RING		0x0001
+ #define NFC_FLAG_LOC		0x0002
+ #define NFC_FLAG_SADDR		0x0004
+@@ -648,6 +731,28 @@ typedef enum {
+ #define NFC_FLAG_MAC_ADDR	0x0800
+ #define NFC_FLAG_RING_VF	0x1000
+ #define NFC_FLAG_RING_QUEUE	0x2000
++#else
++#define NFC_FLAG_RING		0x00000001
++#define NFC_FLAG_LOC		0x00000002
++#define NFC_FLAG_SADDR		0x00000004
++#define NFC_FLAG_DADDR		0x00000008
++#define NFC_FLAG_SPORT		0x00000010
++#define NFC_FLAG_DPORT		0x00000020
++#define NFC_FLAG_SPI		0x00000030
++#define NFC_FLAG_TOS		0x00000040
++#define NFC_FLAG_PROTO		0x00000080
++#define NTUPLE_FLAG_VLAN	0x00000100
++#define NTUPLE_FLAG_UDEF	0x00000200
++#define NTUPLE_FLAG_VETH	0x00000400
++#define NFC_FLAG_MAC_ADDR	0x00000800
++#define NFC_FLAG_RING_VF	0x00001000
++#define NFC_FLAG_RING_QUEUE	0x00002000
++#define NFC_FLAG_VNI		0x00004000
++#define NFC_FLAG_SRC_IP		0x00008000
++#define NFC_FLAG_DST_IP		0x00010000
++#define NFC_FLAG_L4_PROTO	0x00020000
++#endif
++
+ 
+ struct rule_opts {
+ 	const char	*name;
+@@ -777,6 +882,46 @@ static const struct rule_opts rule_nfc_usr_ip4[] = {
+ 	  offsetof(struct ethtool_rx_flow_spec, m_ext.h_dest) },
+ };
+ 
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++static const struct rule_opts rule_nfc_vxlan_ip4[] = {
++	{ "vni", OPT_BE32, NFC_FLAG_VNI,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip4_spec.vni),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip4_spec.vni) },
++	{ "src", OPT_MAC, NFC_FLAG_SADDR,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip4_spec.src),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip4_spec.src) },
++	{ "dst", OPT_MAC, NFC_FLAG_DADDR,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip4_spec.dst),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip4_spec.dst) },
++	{ "proto", OPT_BE16, NFC_FLAG_PROTO,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip4_spec.eth_type),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip4_spec.eth_type) },
++	{ "tos", OPT_U8, NFC_FLAG_TOS,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip4_spec.tos),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip4_spec.tos) },
++	{ "l4proto", OPT_U8, NFC_FLAG_L4_PROTO,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip4_spec.l4_proto),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip4_spec.l4_proto) },
++	{ "src-ip", OPT_IP4, NFC_FLAG_SRC_IP,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip4_spec.ip4src),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip4_spec.ip4src) },
++	{ "dst-ip", OPT_IP4, NFC_FLAG_DST_IP,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip4_spec.ip4dst),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip4_spec.ip4dst) },
++	{ "action", OPT_U64, NFC_FLAG_RING,
++	  offsetof(struct ethtool_rx_flow_spec, ring_cookie), -1 },
++	{ "vf", OPT_RING_VF, NFC_FLAG_RING_VF,
++	  offsetof(struct ethtool_rx_flow_spec, ring_cookie), -1 },
++	{ "queue", OPT_RING_QUEUE, NFC_FLAG_RING_QUEUE,
++	  offsetof(struct ethtool_rx_flow_spec, ring_cookie), -1 },
++	{ "loc", OPT_U32, NFC_FLAG_LOC,
++	  offsetof(struct ethtool_rx_flow_spec, location), -1 },
++	{ "vlan", OPT_BE16, NTUPLE_FLAG_VLAN,
++	  offsetof(struct ethtool_rx_flow_spec, h_ext.vlan_tci),
++	  offsetof(struct ethtool_rx_flow_spec, m_ext.vlan_tci) },
++};
++#endif
++
+ static const struct rule_opts rule_nfc_tcp_ip6[] = {
+ 	{ "src-ip", OPT_IP6, NFC_FLAG_SADDR,
+ 	  offsetof(struct ethtool_rx_flow_spec, h_u.tcp_ip6_spec.ip6src),
+@@ -897,6 +1042,46 @@ static const struct rule_opts rule_nfc_usr_ip6[] = {
+ 	  offsetof(struct ethtool_rx_flow_spec, m_ext.h_dest) },
+ };
+ 
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++static const struct rule_opts rule_nfc_vxlan_ip6[] = {
++	{ "vni", OPT_BE32, NFC_FLAG_VNI,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip4_spec.vni),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip4_spec.vni) },
++	{ "src", OPT_MAC, NFC_FLAG_SADDR,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip4_spec.src),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip4_spec.src) },
++	{ "dst", OPT_MAC, NFC_FLAG_DADDR,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip4_spec.dst),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip4_spec.dst) },
++	{ "proto", OPT_BE16, NFC_FLAG_PROTO,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip4_spec.eth_type),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip4_spec.eth_type) },
++	{ "tclass", OPT_U8, NFC_FLAG_TOS,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip6_spec.tclass),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip6_spec.tclass) },
++	{ "l4proto", OPT_U8, NFC_FLAG_L4_PROTO,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip6_spec.l4_proto),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip6_spec.l4_proto) },
++	{ "src-ip", OPT_IP6, NFC_FLAG_SRC_IP,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip6_spec.ip6src),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip6_spec.ip6src) },
++	{ "dst-ip", OPT_IP6, NFC_FLAG_DST_IP,
++	  offsetof(struct ethtool_rx_flow_spec, h_u.vxlan_ip6_spec.ip6dst),
++	  offsetof(struct ethtool_rx_flow_spec, m_u.vxlan_ip6_spec.ip6dst) },
++	{ "action", OPT_U64, NFC_FLAG_RING,
++	  offsetof(struct ethtool_rx_flow_spec, ring_cookie), -1 },
++	{ "vf", OPT_RING_VF, NFC_FLAG_RING_VF,
++	  offsetof(struct ethtool_rx_flow_spec, ring_cookie), -1 },
++	{ "queue", OPT_RING_QUEUE, NFC_FLAG_RING_QUEUE,
++	  offsetof(struct ethtool_rx_flow_spec, ring_cookie), -1 },
++	{ "loc", OPT_U32, NFC_FLAG_LOC,
++	  offsetof(struct ethtool_rx_flow_spec, location), -1 },
++	{ "vlan", OPT_BE16, NTUPLE_FLAG_VLAN,
++	  offsetof(struct ethtool_rx_flow_spec, h_ext.vlan_tci),
++	  offsetof(struct ethtool_rx_flow_spec, m_ext.vlan_tci) },
++};
++#endif
++
+ static const struct rule_opts rule_nfc_ether[] = {
+ 	{ "src", OPT_MAC, NFC_FLAG_SADDR,
+ 	  offsetof(struct ethtool_rx_flow_spec, h_u.ether_spec.h_source),
+@@ -1289,6 +1474,10 @@ int rxclass_parse_ruleopts(struct cmd_context *ctx,
+ 		flow_type = ESP_V4_FLOW;
+ 	else if (!strcmp(argp[0], "ip4"))
+ 		flow_type = IPV4_USER_FLOW;
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++	else if (!strcmp(argp[0], "vxlan4"))
++		flow_type = VXLAN_V4_FLOW;
++#endif
+ 	else if (!strcmp(argp[0], "tcp6"))
+ 		flow_type = TCP_V6_FLOW;
+ 	else if (!strcmp(argp[0], "udp6"))
+@@ -1301,6 +1490,10 @@ int rxclass_parse_ruleopts(struct cmd_context *ctx,
+ 		flow_type = ESP_V6_FLOW;
+ 	else if (!strcmp(argp[0], "ip6"))
+ 		flow_type = IPV6_USER_FLOW;
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++	else if (!strcmp(argp[0], "vxlan6"))
++		flow_type = VXLAN_V6_FLOW;
++#endif
+ 	else if (!strcmp(argp[0], "ether"))
+ 		flow_type = ETHER_FLOW;
+ 	else
+@@ -1322,6 +1515,12 @@ int rxclass_parse_ruleopts(struct cmd_context *ctx,
+ 		options = rule_nfc_usr_ip4;
+ 		n_opts = ARRAY_SIZE(rule_nfc_usr_ip4);
+ 		break;
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++	case VXLAN_V4_FLOW:
++		options = rule_nfc_vxlan_ip4;
++		n_opts = ARRAY_SIZE(rule_nfc_vxlan_ip4);
++		break;
++#endif
+ 	case TCP_V6_FLOW:
+ 	case UDP_V6_FLOW:
+ 	case SCTP_V6_FLOW:
+@@ -1337,6 +1536,12 @@ int rxclass_parse_ruleopts(struct cmd_context *ctx,
+ 		options = rule_nfc_usr_ip6;
+ 		n_opts = ARRAY_SIZE(rule_nfc_usr_ip6);
+ 		break;
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++	case VXLAN_V6_FLOW:
++		options = rule_nfc_vxlan_ip6;
++		n_opts = ARRAY_SIZE(rule_nfc_vxlan_ip6);
++		break;
++#endif
+ 	case ETHER_FLOW:
+ 		options = rule_nfc_ether;
+ 		n_opts = ARRAY_SIZE(rule_nfc_ether);
+diff --git a/uapi/linux/ethtool.h b/uapi/linux/ethtool.h
+index a7f549a..8e9054d 100644
+--- a/uapi/linux/ethtool.h
++++ b/uapi/linux/ethtool.h
+@@ -229,6 +229,7 @@ enum tunable_id {
+ 	ETHTOOL_RX_COPYBREAK,
+ 	ETHTOOL_TX_COPYBREAK,
+ 	ETHTOOL_PFC_PREVENTION_TOUT, /* timeout in msecs */
++	ETHTOOL_TX_COPYBREAK_BUF_SIZE,
+ 	/*
+ 	 * Add your fresh new tunable attribute above and remember to update
+ 	 * tunable_strings[] in net/ethtool/common.c
+@@ -899,6 +900,30 @@ struct ethtool_usrip4_spec {
+ 	__u8    proto;
+ };
+ 
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++/**
++ * struct ethtool_vxlan4_spec - general flow specification for VxLAN IPv4
++ * @vni: VxLAN network identifier
++ * @dst: Inner destination eth addr
++ * @src: Inner source eth addr
++ * @eth_type: Inner ethernet type
++ * @tos: Inner type-of-service
++ * @l4_proto: Inner transport protocol number
++ * @ip4src: Inner source host
++ * @ip4dst: Inner destination host
++ */
++struct ethtool_vxlan4_spec {
++	__be32	vni;
++	__u8	dst[ETH_ALEN];
++	__u8	src[ETH_ALEN];
++	__be16	eth_type;
++	__u8	tos;
++	__u8	l4_proto;
++	__be32	ip4src;
++	__be32	ip4dst;
++};
++#endif
++
+ /**
+  * struct ethtool_tcpip6_spec - flow specification for TCP/IPv6 etc.
+  * @ip6src: Source host
+@@ -949,6 +974,30 @@ struct ethtool_usrip6_spec {
+ 	__u8    l4_proto;
+ };
+ 
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++/**
++ * struct ethtool_vxlan6_spec - general flow specification for VxLAN IPv6
++ * @vni: VxLAN network identifier
++ * @dst: Inner destination eth addr
++ * @src: Inner source eth addr
++ * @eth_type: Inner ethernet type
++ * @tclass: Inner traffic Class
++ * @l4_proto: Inner transport protocol number
++ * @ip6src: Inner source host
++ * @ip6dst: Inner destination host
++ */
++struct ethtool_vxlan6_spec {
++	__be32	vni;
++	__u8	dst[ETH_ALEN];
++	__u8	src[ETH_ALEN];
++	__be16	eth_type;
++	__u8	tclass;
++	__u8	l4_proto;
++	__be32	ip6src[4];
++	__be32	ip6dst[4];
++};
++#endif
++
+ union ethtool_flow_union {
+ 	struct ethtool_tcpip4_spec		tcp_ip4_spec;
+ 	struct ethtool_tcpip4_spec		udp_ip4_spec;
+@@ -964,6 +1013,10 @@ union ethtool_flow_union {
+ 	struct ethtool_usrip6_spec		usr_ip6_spec;
+ 	struct ethhdr				ether_spec;
+ 	__u8					hdata[52];
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++	struct ethtool_vxlan4_spec		vxlan_ip4_spec;
++	struct ethtool_vxlan6_spec		vxlan_ip6_spec;
++#endif
+ };
+ 
+ /**
+@@ -1867,6 +1920,10 @@ static __inline__ int ethtool_validate_duplex(__u8 duplex)
+ #define	IPV4_FLOW	0x10	/* hash only */
+ #define	IPV6_FLOW	0x11	/* hash only */
+ #define	ETHER_FLOW	0x12	/* spec only (ether_spec) */
++#ifdef ETHTOOL_FD_VXLAN_FEATURE
++#define	VXLAN_V4_FLOW	0x43	/* spec only (vxlan_ip4_spec) */
++#define	VXLAN_V6_FLOW	0x44	/* spec only (vxlan_ip6_spec) */
++#endif
+ /* Flag to enable additional fields in struct ethtool_rx_flow_spec */
+ #define	FLOW_EXT	0x80000000
+ #define	FLOW_MAC_EXT	0x40000000
+diff --git a/uapi/linux/ethtool_netlink.h b/uapi/linux/ethtool_netlink.h
+index 5665d64..aaadce7 100644
+--- a/uapi/linux/ethtool_netlink.h
++++ b/uapi/linux/ethtool_netlink.h
+@@ -314,6 +314,12 @@ enum {
+ 
+ /* RINGS */
+ 
++enum {
++	ETHTOOL_TCP_DATA_SPLIT_UNKNOWN = 0,
++	ETHTOOL_TCP_DATA_SPLIT_DISABLED,
++	ETHTOOL_TCP_DATA_SPLIT_ENABLED,
++};
++
+ enum {
+ 	ETHTOOL_A_RINGS_UNSPEC,
+ 	ETHTOOL_A_RINGS_HEADER,				/* nest - _A_HEADER_* */
+@@ -325,6 +331,10 @@ enum {
+ 	ETHTOOL_A_RINGS_RX_MINI,			/* u32 */
+ 	ETHTOOL_A_RINGS_RX_JUMBO,			/* u32 */
+ 	ETHTOOL_A_RINGS_TX,				/* u32 */
++	ETHTOOL_A_RINGS_RX_BUF_LEN,			/* u32 */
++	ETHTOOL_A_RINGS_TCP_DATA_SPLIT,			/* u8  */
++	ETHTOOL_A_RINGS_CQE_SIZE,			/* u32 */
++	ETHTOOL_A_RINGS_TX_PUSH,			/* u8  */
+ 
+ 	/* add new constants above here */
+ 	__ETHTOOL_A_RINGS_CNT,
+diff --git a/uapi/linux/if_link.h b/uapi/linux/if_link.h
+index 1d4ed60..34002e7 100644
+--- a/uapi/linux/if_link.h
++++ b/uapi/linux/if_link.h
+@@ -211,6 +211,9 @@ struct rtnl_link_stats {
+  * @rx_nohandler: Number of packets received on the interface
+  *   but dropped by the networking stack because the device is
+  *   not designated to receive packets (e.g. backup link in a bond).
++ *
++ * @rx_otherhost_dropped: Number of packets dropped due to mismatch
++ *   in destination MAC address.
+  */
+ struct rtnl_link_stats64 {
+ 	__u64	rx_packets;
+@@ -243,6 +246,23 @@ struct rtnl_link_stats64 {
+ 	__u64	rx_compressed;
+ 	__u64	tx_compressed;
+ 	__u64	rx_nohandler;
++
++	__u64	rx_otherhost_dropped;
++};
++
++/* Subset of link stats useful for in-HW collection. Meaning of the fields is as
++ * for struct rtnl_link_stats64.
++ */
++struct rtnl_hw_stats64 {
++	__u64	rx_packets;
++	__u64	tx_packets;
++	__u64	rx_bytes;
++	__u64	tx_bytes;
++	__u64	rx_errors;
++	__u64	tx_errors;
++	__u64	rx_dropped;
++	__u64	tx_dropped;
++	__u64	multicast;
+ };
+ 
+ /* The struct should be in sync with struct ifmap */
+@@ -347,6 +367,7 @@ enum {
+ 	 */
+ 	IFLA_PARENT_DEV_NAME,
+ 	IFLA_PARENT_DEV_BUS_NAME,
++	IFLA_GRO_MAX_SIZE,
+ 
+ 	__IFLA_MAX
+ };
+@@ -534,6 +555,7 @@ enum {
+ 	IFLA_BRPORT_MRP_IN_OPEN,
+ 	IFLA_BRPORT_MCAST_EHT_HOSTS_LIMIT,
+ 	IFLA_BRPORT_MCAST_EHT_HOSTS_CNT,
++	IFLA_BRPORT_LOCKED,
+ 	__IFLA_BRPORT_MAX
+ };
+ #define IFLA_BRPORT_MAX (__IFLA_BRPORT_MAX - 1)
+@@ -709,7 +731,55 @@ enum ipvlan_mode {
+ #define IPVLAN_F_PRIVATE	0x01
+ #define IPVLAN_F_VEPA		0x02
+ 
++/* Tunnel RTM header */
++struct tunnel_msg {
++	__u8 family;
++	__u8 flags;
++	__u16 reserved2;
++	__u32 ifindex;
++};
++
+ /* VXLAN section */
++
++/* include statistics in the dump */
++#define TUNNEL_MSG_FLAG_STATS	0x01
++
++#define TUNNEL_MSG_VALID_USER_FLAGS TUNNEL_MSG_FLAG_STATS
++
++/* Embedded inside VXLAN_VNIFILTER_ENTRY_STATS */
++enum {
++	VNIFILTER_ENTRY_STATS_UNSPEC,
++	VNIFILTER_ENTRY_STATS_RX_BYTES,
++	VNIFILTER_ENTRY_STATS_RX_PKTS,
++	VNIFILTER_ENTRY_STATS_RX_DROPS,
++	VNIFILTER_ENTRY_STATS_RX_ERRORS,
++	VNIFILTER_ENTRY_STATS_TX_BYTES,
++	VNIFILTER_ENTRY_STATS_TX_PKTS,
++	VNIFILTER_ENTRY_STATS_TX_DROPS,
++	VNIFILTER_ENTRY_STATS_TX_ERRORS,
++	VNIFILTER_ENTRY_STATS_PAD,
++	__VNIFILTER_ENTRY_STATS_MAX
++};
++#define VNIFILTER_ENTRY_STATS_MAX (__VNIFILTER_ENTRY_STATS_MAX - 1)
++
++enum {
++	VXLAN_VNIFILTER_ENTRY_UNSPEC,
++	VXLAN_VNIFILTER_ENTRY_START,
++	VXLAN_VNIFILTER_ENTRY_END,
++	VXLAN_VNIFILTER_ENTRY_GROUP,
++	VXLAN_VNIFILTER_ENTRY_GROUP6,
++	VXLAN_VNIFILTER_ENTRY_STATS,
++	__VXLAN_VNIFILTER_ENTRY_MAX
++};
++#define VXLAN_VNIFILTER_ENTRY_MAX	(__VXLAN_VNIFILTER_ENTRY_MAX - 1)
++
++enum {
++	VXLAN_VNIFILTER_UNSPEC,
++	VXLAN_VNIFILTER_ENTRY,
++	__VXLAN_VNIFILTER_MAX
++};
++#define VXLAN_VNIFILTER_MAX	(__VXLAN_VNIFILTER_MAX - 1)
++
+ enum {
+ 	IFLA_VXLAN_UNSPEC,
+ 	IFLA_VXLAN_ID,
+@@ -741,6 +811,7 @@ enum {
+ 	IFLA_VXLAN_GPE,
+ 	IFLA_VXLAN_TTL_INHERIT,
+ 	IFLA_VXLAN_DF,
++	IFLA_VXLAN_VNIFILTER, /* only applicable with COLLECT_METADATA mode */
+ 	__IFLA_VXLAN_MAX
+ };
+ #define IFLA_VXLAN_MAX	(__IFLA_VXLAN_MAX - 1)
+@@ -774,6 +845,7 @@ enum {
+ 	IFLA_GENEVE_LABEL,
+ 	IFLA_GENEVE_TTL_INHERIT,
+ 	IFLA_GENEVE_DF,
++	IFLA_GENEVE_INNER_PROTO_INHERIT,
+ 	__IFLA_GENEVE_MAX
+ };
+ #define IFLA_GENEVE_MAX	(__IFLA_GENEVE_MAX - 1)
+@@ -819,6 +891,8 @@ enum {
+ 	IFLA_GTP_FD1,
+ 	IFLA_GTP_PDP_HASHSIZE,
+ 	IFLA_GTP_ROLE,
++	IFLA_GTP_CREATE_SOCKETS,
++	IFLA_GTP_RESTART_COUNT,
+ 	__IFLA_GTP_MAX,
+ };
+ #define IFLA_GTP_MAX (__IFLA_GTP_MAX - 1)
+@@ -856,6 +930,8 @@ enum {
+ 	IFLA_BOND_TLB_DYNAMIC_LB,
+ 	IFLA_BOND_PEER_NOTIF_DELAY,
+ 	IFLA_BOND_AD_LACP_ACTIVE,
++	IFLA_BOND_MISSED_MAX,
++	IFLA_BOND_NS_IP6_TARGET,
+ 	__IFLA_BOND_MAX,
+ };
+ 
+@@ -1152,6 +1228,17 @@ enum {
+ 
+ #define IFLA_STATS_FILTER_BIT(ATTR)	(1 << (ATTR - 1))
+ 
++enum {
++	IFLA_STATS_GETSET_UNSPEC,
++	IFLA_STATS_GET_FILTERS, /* Nest of IFLA_STATS_LINK_xxx, each a u32 with
++				 * a filter mask for the corresponding group.
++				 */
++	IFLA_STATS_SET_OFFLOAD_XSTATS_L3_STATS, /* 0 or 1 as u8 */
++	__IFLA_STATS_GETSET_MAX,
++};
++
++#define IFLA_STATS_GETSET_MAX (__IFLA_STATS_GETSET_MAX - 1)
++
+ /* These are embedded into IFLA_STATS_LINK_XSTATS:
+  * [IFLA_STATS_LINK_XSTATS]
+  * -> [LINK_XSTATS_TYPE_xxx]
+@@ -1169,10 +1256,21 @@ enum {
+ enum {
+ 	IFLA_OFFLOAD_XSTATS_UNSPEC,
+ 	IFLA_OFFLOAD_XSTATS_CPU_HIT, /* struct rtnl_link_stats64 */
++	IFLA_OFFLOAD_XSTATS_HW_S_INFO,	/* HW stats info. A nest */
++	IFLA_OFFLOAD_XSTATS_L3_STATS,	/* struct rtnl_hw_stats64 */
+ 	__IFLA_OFFLOAD_XSTATS_MAX
+ };
+ #define IFLA_OFFLOAD_XSTATS_MAX (__IFLA_OFFLOAD_XSTATS_MAX - 1)
+ 
++enum {
++	IFLA_OFFLOAD_XSTATS_HW_S_INFO_UNSPEC,
++	IFLA_OFFLOAD_XSTATS_HW_S_INFO_REQUEST,		/* u8 */
++	IFLA_OFFLOAD_XSTATS_HW_S_INFO_USED,		/* u8 */
++	__IFLA_OFFLOAD_XSTATS_HW_S_INFO_MAX,
++};
++#define IFLA_OFFLOAD_XSTATS_HW_S_INFO_MAX \
++	(__IFLA_OFFLOAD_XSTATS_HW_S_INFO_MAX - 1)
++
+ /* XDP section */
+ 
+ #define XDP_FLAGS_UPDATE_IF_NOEXIST	(1U << 0)
+diff --git a/uapi/linux/net_tstamp.h b/uapi/linux/net_tstamp.h
+index fcc61c7..55501e5 100644
+--- a/uapi/linux/net_tstamp.h
++++ b/uapi/linux/net_tstamp.h
+@@ -62,7 +62,7 @@ struct so_timestamping {
+ /**
+  * struct hwtstamp_config - %SIOCGHWTSTAMP and %SIOCSHWTSTAMP parameter
+  *
+- * @flags:	no flags defined right now, must be zero for %SIOCSHWTSTAMP
++ * @flags:	one of HWTSTAMP_FLAG_*
+  * @tx_type:	one of HWTSTAMP_TX_*
+  * @rx_filter:	one of HWTSTAMP_FILTER_*
+  *
+@@ -78,6 +78,21 @@ struct hwtstamp_config {
+ 	int rx_filter;
+ };
+ 
++/* possible values for hwtstamp_config->flags */
++enum hwtstamp_flags {
++	/*
++	 * With this flag, the user could get bond active interface's
++	 * PHC index. Note this PHC index is not stable as when there
++	 * is a failover, the bond active interface will be changed, so
++	 * will be the PHC index.
++	 */
++	HWTSTAMP_FLAG_BONDED_PHC_INDEX = (1<<0),
++#define HWTSTAMP_FLAG_BONDED_PHC_INDEX	HWTSTAMP_FLAG_BONDED_PHC_INDEX
++
++	HWTSTAMP_FLAG_LAST = HWTSTAMP_FLAG_BONDED_PHC_INDEX,
++	HWTSTAMP_FLAG_MASK = (HWTSTAMP_FLAG_LAST - 1) | HWTSTAMP_FLAG_LAST
++};
++
+ /* possible values for hwtstamp_config->tx_type */
+ enum hwtstamp_tx_types {
+ 	/*
+diff --git a/uapi/linux/netlink.h b/uapi/linux/netlink.h
+index e83e2e3..105b79f 100644
+--- a/uapi/linux/netlink.h
++++ b/uapi/linux/netlink.h
+@@ -72,6 +72,7 @@ struct nlmsghdr {
+ 
+ /* Modifiers to DELETE request */
+ #define NLM_F_NONREC	0x100	/* Do not delete recursively	*/
++#define NLM_F_BULK	0x200	/* Delete multiple objects	*/
+ 
+ /* Flags for ACK message */
+ #define NLM_F_CAPPED	0x100	/* request was capped */
+diff --git a/uapi/linux/rtnetlink.h b/uapi/linux/rtnetlink.h
+index e01efa2..8f874be 100644
+--- a/uapi/linux/rtnetlink.h
++++ b/uapi/linux/rtnetlink.h
+@@ -146,6 +146,8 @@ enum {
+ #define RTM_NEWSTATS RTM_NEWSTATS
+ 	RTM_GETSTATS = 94,
+ #define RTM_GETSTATS RTM_GETSTATS
++	RTM_SETSTATS,
++#define RTM_SETSTATS RTM_SETSTATS
+ 
+ 	RTM_NEWCACHEREPORT = 96,
+ #define RTM_NEWCACHEREPORT RTM_NEWCACHEREPORT
+@@ -185,6 +187,13 @@ enum {
+ 	RTM_GETNEXTHOPBUCKET,
+ #define RTM_GETNEXTHOPBUCKET	RTM_GETNEXTHOPBUCKET
+ 
++	RTM_NEWTUNNEL = 120,
++#define RTM_NEWTUNNEL	RTM_NEWTUNNEL
++	RTM_DELTUNNEL,
++#define RTM_DELTUNNEL	RTM_DELTUNNEL
++	RTM_GETTUNNEL,
++#define RTM_GETTUNNEL	RTM_GETTUNNEL
++
+ 	__RTM_MAX,
+ #define RTM_MAX		(((__RTM_MAX + 3) & ~3) - 1)
+ };
+@@ -752,6 +761,12 @@ enum rtnetlink_groups {
+ #define RTNLGRP_NEXTHOP		RTNLGRP_NEXTHOP
+ 	RTNLGRP_BRVLAN,
+ #define RTNLGRP_BRVLAN		RTNLGRP_BRVLAN
++	RTNLGRP_MCTP_IFADDR,
++#define RTNLGRP_MCTP_IFADDR	RTNLGRP_MCTP_IFADDR
++	RTNLGRP_TUNNEL,
++#define RTNLGRP_TUNNEL		RTNLGRP_TUNNEL
++	RTNLGRP_STATS,
++#define RTNLGRP_STATS		RTNLGRP_STATS
+ 	__RTNLGRP_MAX
+ };
+ #define RTNLGRP_MAX	(__RTNLGRP_MAX - 1)
+@@ -800,6 +815,7 @@ enum {
+ #define RTEXT_FILTER_MRP	(1 << 4)
+ #define RTEXT_FILTER_CFM_CONFIG	(1 << 5)
+ #define RTEXT_FILTER_CFM_STATUS	(1 << 6)
++#define RTEXT_FILTER_MST	(1 << 7)
+ 
+ /* End of information exported to user level */
+ 

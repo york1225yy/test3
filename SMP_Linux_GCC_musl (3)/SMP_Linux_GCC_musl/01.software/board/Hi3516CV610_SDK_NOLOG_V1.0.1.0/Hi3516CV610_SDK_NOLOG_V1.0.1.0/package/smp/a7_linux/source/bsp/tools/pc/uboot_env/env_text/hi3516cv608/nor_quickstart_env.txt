@@ -1,0 +1,16 @@
+arch=arm
+baudrate=115200
+board=hi3516cv608
+board_name=hi3516cv608
+bootdelay=2
+soc=hi3516cv608
+cpu=armv7
+ethact=eth0
+fdt_high=0
+stderr=serial
+stdin=serial
+stdout=serial
+vendor=hisilicon
+verify=n
+bootargs=quiet timestamp=0x41FFF800,0x800 mem=30m earlycon=pl011,0x11040000 console=ttyAMA0,115200 clk_ignore_unused rw root=/dev/ram0 rootfstype=romfs initrd=0x41980000,0x480000 mtdparts=sfc:512K(boot),512K(env),5M(kernel),10M(rootfs.ramdisk)
+bootcmd=sf probe 0;rugzip 0x100000 0x42000000 0x40007f40 0x80000;rugzip 0x600000 0x42000000 0x41980000 0x80000;bootm 0x40007f44

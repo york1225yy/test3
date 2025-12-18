@@ -1,0 +1,111 @@
+diff --git a/editors/awk.c b/editors/awk.c
+index f6314ac..6a5846e 100644
+--- a/editors/awk.c
++++ b/editors/awk.c
+@@ -3114,6 +3114,9 @@ static var *evaluate(node *op, var *res)
+ 
+ 		case XC( OC_MOVE ):
+ 			debug_printf_eval("MOVE\n");
++            /* make sure that we never return a temp var */
++            if (L.v == TMPVAR0)
++                L.v = res;
+ 			/* if source is a temporary string, jusk relink it to dest */
+ 			if (R.v == TMPVAR1
+ 			 && !(R.v->type & VF_NUMBER)
+diff --git a/libbb/xconnect.c b/libbb/xconnect.c
+index 5dd9cfd..264b987 100644
+--- a/libbb/xconnect.c
++++ b/libbb/xconnect.c
+@@ -505,12 +505,13 @@ static char* FAST_FUNC sockaddr2str(const struct sockaddr *sa, int flags)
+ 	);
+ 	if (rc)
+ 		return NULL;
++	/* ensure host contains only printable characters */
+ 	if (flags & IGNORE_PORT)
+-		return xstrdup(host);
++		return xstrdup(printable_string(host));
+ #if ENABLE_FEATURE_IPV6
+ 	if (sa->sa_family == AF_INET6) {
+ 		if (strchr(host, ':')) /* heh, it's not a resolved hostname */
+-			return xasprintf("[%s]:%s", host, serv);
++			return xasprintf("[%s]:%s", printable_string(host), serv);
+ 		/*return xasprintf("%s:%s", host, serv);*/
+ 		/* - fall through instead */
+ 	}
+diff --git a/miscutils/bc.c b/miscutils/bc.c
+index f9b08b0..4363585 100644
+--- a/miscutils/bc.c
++++ b/miscutils/bc.c
+@@ -2892,6 +2892,8 @@ static char peek_inbuf(void)
+ 	) {
+ 		xc_read_line(&G.input_buffer, G.prs.lex_input_fp);
+ 		G.prs.lex_inbuf = G.input_buffer.v;
++		// lex_next_at may point to now-freed data, update it:
++		G.prs.lex_next_at = G.prs.lex_inbuf;
+ 		if (G.input_buffer.len <= 1) // on EOF, len is 1 (NUL byte)
+ 			G.prs.lex_input_fp = NULL;
+ 	}
+diff --git a/networking/nslookup.c b/networking/nslookup.c
+index de7b5c0..0ba4adc 100644
+--- a/networking/nslookup.c
++++ b/networking/nslookup.c
+@@ -407,7 +407,7 @@ static int parse_reply(const unsigned char *msg, size_t len)
+ 				//printf("Unable to uncompress domain: %s\n", strerror(errno));
+ 				return -1;
+ 			}
+-			printf(format, ns_rr_name(rr), dname);
++			printf(format, ns_rr_name(rr), printable_string(dname));
+ 			break;
+ 
+ 		case ns_t_mx:
+@@ -422,7 +422,7 @@ static int parse_reply(const unsigned char *msg, size_t len)
+ 				//printf("Cannot uncompress MX domain: %s\n", strerror(errno));
+ 				return -1;
+ 			}
+-			printf("%s\tmail exchanger = %d %s\n", ns_rr_name(rr), n, dname);
++			printf("%s\tmail exchanger = %d %s\n", ns_rr_name(rr), n, printable_string(dname));
+ 			break;
+ 
+ 		case ns_t_txt:
+@@ -434,7 +434,7 @@ static int parse_reply(const unsigned char *msg, size_t len)
+ 			if (n > 0) {
+ 				memset(dname, 0, sizeof(dname));
+ 				memcpy(dname, ns_rr_rdata(rr) + 1, n);
+-				printf("%s\ttext = \"%s\"\n", ns_rr_name(rr), dname);
++				printf("%s\ttext = \"%s\"\n", ns_rr_name(rr), printable_string(dname));
+ 			}
+ 			break;
+ 
+@@ -454,7 +454,7 @@ static int parse_reply(const unsigned char *msg, size_t len)
+ 			}
+ 
+ 			printf("%s\tservice = %u %u %u %s\n", ns_rr_name(rr),
+-				ns_get16(cp), ns_get16(cp + 2), ns_get16(cp + 4), dname);
++				ns_get16(cp), ns_get16(cp + 2), ns_get16(cp + 4), printable_string(dname));
+ 			break;
+ 
+ 		case ns_t_soa:
+@@ -483,7 +483,7 @@ static int parse_reply(const unsigned char *msg, size_t len)
+ 				return -1;
+ 			}
+ 
+-			printf("\tmail addr = %s\n", dname);
++			printf("\tmail addr = %s\n", printable_string(dname));
+ 			cp += n;
+ 
+ 			printf("\tserial = %lu\n", ns_get32(cp));
+diff --git a/testsuite/awk.tests b/testsuite/awk.tests
+index bcaafe8..156aa65 100755
+--- a/testsuite/awk.tests
++++ b/testsuite/awk.tests
+@@ -469,4 +469,10 @@ testing 'awk printf %% prints one %' \
+ 	"%\n" \
+ 	'' ''
+ 
++testing 'awk assign while test' \
++	"awk '\$1==\$1=\"foo\" {print \$1}'" \
++	"foo\n" \
++	"" \
++	"foo"
++
+ exit $FAILCOUNT
